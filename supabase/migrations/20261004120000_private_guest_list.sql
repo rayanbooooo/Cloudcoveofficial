@@ -179,17 +179,13 @@ create function apply_visit() returns trigger
 language plpgsql security definer set search_path = public as $$
 declare
   v venues%rowtype;
-  n int;
 begin
   select * into v from venues where id = new.venue_id;
   update memberships
      set visits = visits + 1,
-         last_visit_at = greatest(coalesce(last_visit_at, new.visited_at), new.visited_at)
-   where id = new.membership_id
-   returning visits into n;
-  update memberships
-     set tier = case when n >= v.tier_black_at then 'black'::member_tier
-                     when n >= v.tier_gold_at  then 'gold'::member_tier
+         last_visit_at = greatest(coalesce(last_visit_at, new.visited_at), new.visited_at),
+         tier = case when visits + 1 >= v.tier_black_at then 'black'::member_tier
+                     when visits + 1 >= v.tier_gold_at  then 'gold'::member_tier
                      else 'silver'::member_tier end
    where id = new.membership_id;
   return new;

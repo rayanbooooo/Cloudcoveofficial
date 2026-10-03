@@ -168,6 +168,32 @@ p { margin: 0; }
 .sheet .timer { font-family: var(--font-mono); font-size: 13px; color: var(--app-muted); }
 .app-toast { position: absolute; left: 16px; right: 16px; top: 44px; z-index: 6; background: var(--app-gold); color: var(--app-gold-ink); border-radius: 14px; padding: 11px 14px; font-weight: 700; font-size: 13.5px; text-align: center; animation: up .25s ease-out; }
 @media (prefers-reduced-motion: reduce) { .sheet, .app-toast { animation: none; } .progress .bar i { transition: none; } }
+.wallet-btn { width: 100%; margin-top: 14px; display: flex; align-items: center; justify-content: center; gap: 10px; background: #000; color: #fff; border: 1px solid #3a3a3a; border-radius: 12px; padding: 11px; font-weight: 600; font-size: 14.5px; }
+.wallet-btn svg { width: 26px; height: 20px; }
+.in-wallet { margin-top: 14px; display: flex; gap: 10px; align-items: center; padding: 10px 12px; border-radius: 12px; background: var(--app-card); font-size: 12.5px; color: var(--app-muted); }
+.in-wallet b { color: var(--app-ink); }
+.in-wallet svg { width: 32px; height: 24px; flex: none; }
+.wsheet { position: absolute; inset: 0; z-index: 5; background: #1c1c1e; color: #fff; display: flex; flex-direction: column; animation: up .28s ease-out; font-family: -apple-system, "SF Pro Text", var(--font-body); }
+.wsheet .wbar { display: flex; justify-content: space-between; align-items: center; padding: 46px 18px 12px; font-size: 16px; }
+.wsheet .wbar button { background: none; border: 0; color: #0a84ff; font-size: 16px; font-weight: 600; padding: 4px; }
+.wsheet .wbar b { font-weight: 600; }
+.wpass { margin: 6px 18px; border-radius: 14px; padding: 14px 16px 18px; background: var(--app-bg); color: var(--app-ink); box-shadow: 0 10px 30px rgb(0 0 0 / .5); display: grid; gap: 14px; }
+.wpass .wtop { display: flex; justify-content: space-between; align-items: start; gap: 12px; }
+.wpass .wlogo { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 15px; min-width: 0; }
+.wpass .wlogo i { width: 26px; height: 26px; border-radius: 50%; border: 1px solid var(--app-gold); color: var(--app-gold); display: grid; place-items: center; font-style: normal; font-family: var(--font-display); font-size: 12px; flex: none; }
+.wpass .wl { font-size: 10px; font-weight: 600; letter-spacing: .06em; color: var(--app-gold); text-transform: uppercase; }
+.wpass .wv { font-size: 15px; font-weight: 500; }
+.wpass .wbig { font-size: 30px; font-weight: 300; line-height: 1.1; }
+.wpass .wrow { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.wpass .wqr { justify-self: center; background: #fff; border-radius: 8px; padding: 8px; display: grid; justify-items: center; gap: 4px; color: #000; font-size: 10.5px; font-family: var(--font-mono); }
+.wpass .wqr svg { width: 108px; height: 108px; display: block; }
+.wsheet .wnote { padding: 14px 22px; font-size: 12.5px; color: #a1a1a6; text-align: center; }
+.lock-note { position: absolute; left: 10px; right: 10px; top: 40px; z-index: 7; display: grid; grid-template-columns: 34px 1fr; gap: 10px; align-items: center; padding: 11px 13px; border-radius: 18px; background: rgb(40 40 44 / .92); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); color: #fff; font-family: -apple-system, "SF Pro Text", var(--font-body); font-size: 13px; animation: up .3s ease-out; box-shadow: 0 8px 24px rgb(0 0 0 / .4); }
+.lock-note .wicon { width: 34px; height: 34px; border-radius: 8px; background: #000; display: grid; place-items: center; }
+.lock-note .wicon svg { width: 24px; height: 18px; }
+.lock-note small { display: flex; justify-content: space-between; color: #b8b8bd; font-size: 11.5px; }
+.lock-note b { display: block; font-weight: 600; }
+@media (prefers-reduced-motion: reduce) { .wsheet, .lock-note { animation: none; } }
 .concept { text-align: center; font-size: 10.5px; color: var(--app-muted); letter-spacing: .08em; padding: 14px 0 2px; }
 
 /* ---------------- side panels ---------------- */
@@ -335,7 +361,7 @@ p { margin: 0; }
   function fresh() {
     return { screen: "join", tab: "home", name: "", phone: "", bday: "", interests: [], consent: true,
       visits: 0, code: "", voucherAt: 0, drinkUsed: false, bdayWeek: false, bdayUsed: false,
-      book: { day: 1, time: "20:00", guests: 4, done: false }, rsvp: {}, sheet: null, member: "" };
+      book: { day: 1, time: "20:00", guests: 4, done: false }, rsvp: {}, sheet: null, member: "", inWallet: false };
   }
   var feed = [];
   function now() { return new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }); }
@@ -382,10 +408,18 @@ p { margin: 0; }
       '<div><div class="mid">MEMBER ' + S.member + '</div><div class="holder">' + esc(S.name.toUpperCase()) + "</div></div></div>" + prog;
   }
 
+  var WALLET_ICON = '<svg viewBox="0 0 26 20" aria-hidden="true"><rect x="0.5" y="0.5" width="25" height="19" rx="3.5" fill="#fff" stroke="#fff"/><rect x="2" y="2" width="22" height="5" rx="1.5" fill="#2E9BD6"/><rect x="2" y="5" width="22" height="5" rx="1.5" fill="#F5B53F"/><rect x="2" y="8" width="22" height="5" rx="1.5" fill="#E9573E"/><path d="M0.5 11h8c1.5 0 2 2.5 4.5 2.5S16 11 17.5 11h8v5a3.5 3.5 0 0 1-3.5 3.5H4A3.5 3.5 0 0 1 .5 16z" fill="#1c1c1e"/></svg>';
+
+  function walletBlock() {
+    return S.inWallet
+      ? '<div class="in-wallet">' + WALLET_ICON + '<span><b>In your Apple Wallet.</b> The card updates itself when your tier or perks change.</span></div>'
+      : '<button class="wallet-btn" id="add-wallet" type="button">' + WALLET_ICON + "Add to Apple Wallet</button>";
+  }
+
   function homeView() {
     return '<div class="hello"><div><div class="label">Good evening</div><h2>' + esc(S.name) + '</h2></div><div class="monogram mini-mono">' + esc(initials(venue.name)) + "</div></div>" +
       cardHTML() +
-      '<div class="a2hs"><span style="font-size:18px">⊕</span><span><b>Add to Home Screen</b> to keep your card one tap away.</span></div>' +
+      walletBlock() +
       '<div class="section-title"><div class="label">Your perks</div></div>' + perkList(true) +
       '<div class="section-title"><div class="label">Next for members</div><button class="chip" data-go="events">All events</button></div>' + eventCard(0) +
       '<button class="line-btn" data-go="book" style="margin-top:4px">Book a table</button>';
@@ -447,6 +481,7 @@ p { margin: 0; }
   function renderOverlay() {
     var o = $("#overlay"); clearInterval(timerI);
     if (!S.sheet) { o.innerHTML = ""; return; }
+    if (S.sheet === "wallet") { o.innerHTML = walletSheet(); return; }
     var isBday = S.sheet === "bday";
     o.innerHTML = '<div class="scrim" id="scrim"></div><div class="sheet" role="dialog" aria-label="Voucher">' +
       '<div class="label">' + (isBday ? "Birthday treat" : "Welcome drink") + '</div><h2 style="font-size:28px">' + (isBday ? "Happy birthday, " + esc(S.name) : "Show this to your server") + "</h2>" +
@@ -458,6 +493,41 @@ p { margin: 0; }
       el.textContent = "Valid for " + String(Math.floor(left / 60)).padStart(2, "0") + ":" + String(left % 60).padStart(2, "0") + " · one use";
     }, 1000);
   }
+  function qrSvg(seed) {
+    var n = 25, cells = "", x, y, h = 0;
+    for (var i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) >>> 0;
+    var rnd = function () { h ^= h << 13; h >>>= 0; h ^= h >> 17; h ^= h << 5; h >>>= 0; return h / 4294967296; };
+    var finder = function (fx, fy) { return '<rect x="' + fx + '" y="' + fy + '" width="7" height="7" fill="#000"/><rect x="' + (fx + 1) + '" y="' + (fy + 1) + '" width="5" height="5" fill="#fff"/><rect x="' + (fx + 2) + '" y="' + (fy + 2) + '" width="3" height="3" fill="#000"/>'; };
+    for (y = 0; y < n; y++) for (x = 0; x < n; x++) {
+      var inF = (x < 8 && y < 8) || (x > n - 9 && y < 8) || (x < 8 && y > n - 9);
+      if (!inF && rnd() > 0.52) cells += '<rect x="' + x + '" y="' + y + '" width="1" height="1" fill="#000"/>';
+    }
+    return '<svg viewBox="0 0 ' + n + " " + n + '" shape-rendering="crispEdges" role="img" aria-label="Member QR code"><rect width="' + n + '" height="' + n + '" fill="#fff"/>' + cells + finder(0, 0) + finder(n - 7, 0) + finder(0, n - 7) + "</svg>";
+  }
+
+  function walletSheet() {
+    var ti = tierFor(S.visits), next = TIERS[ti + 1];
+    var nextTxt = next ? next.name + " in " + (next.at - S.visits) + " visit" + (next.at - S.visits === 1 ? "" : "s") : "Highest tier";
+    var tonight = S.bdayWeek && !S.bdayUsed ? "Birthday treat waiting" : "Show this card on arrival";
+    return '<div class="wsheet" role="dialog" aria-label="Apple Wallet card preview">' +
+      '<div class="wbar"><button id="w-cancel">Cancel</button><b>' + (S.inWallet ? "Your card" : "Add card") + "</b>" + (S.inWallet ? '<button id="w-cancel2">Done</button>' : '<button id="w-add">Add</button>') + "</div>" +
+      '<div class="wpass"><div class="wtop"><div class="wlogo"><i>' + esc(initials(venue.name)) + "</i>" + esc(venue.name) + '</div><div style="text-align:right"><div class="wl">Tier</div><div class="wv">' + TIERS[ti].name + "</div></div></div>" +
+      '<div><div class="wl">Member</div><div class="wbig">' + esc(S.name) + "</div></div>" +
+      '<div class="wrow"><div><div class="wl">Visits</div><div class="wv">' + S.visits + '</div></div><div><div class="wl">Next</div><div class="wv">' + nextTxt + "</div></div></div>" +
+      '<div class="wrow"><div><div class="wl">Tonight</div><div class="wv">' + tonight + '</div></div><div style="text-align:right"><div class="wl">Since</div><div class="wv">' + new Date().toLocaleDateString("en-GB", { month: "short", year: "numeric" }) + "</div></div></div>" +
+      '<div class="wqr">' + qrSvg(S.member + venue.name) + "<span>" + S.member + "</span></div></div>" +
+      '<p class="wnote">Staff scan the code to log a visit. When the tier or perks change, the card updates and your lock screen shows it.</p></div>';
+  }
+
+  var lockT;
+  function lockNote(msg) {
+    if (!S.inWallet) return;
+    var old = $("#app .lock-note"); if (old) old.remove();
+    var el = document.createElement("div"); el.className = "lock-note"; el.setAttribute("role", "status");
+    el.innerHTML = '<div class="wicon">' + WALLET_ICON + '</div><div><small><span>WALLET</span><span>now</span></small><b>' + esc(venue.name) + "</b>" + esc(msg) + "</div>";
+    $("#app").appendChild(el); clearTimeout(lockT); lockT = setTimeout(function () { el.remove(); }, 4200);
+  }
+
   function newCode() { return initials(venue.name).slice(0, 2) + "-" + (1000 + Math.floor(Math.random() * 9000)); }
   function openVoucher(kind) { S.sheet = kind; S.code = newCode(); S.voucherAt = Date.now(); renderOverlay(); bindOverlay(); }
 
@@ -481,6 +551,10 @@ p { margin: 0; }
         render(); openVoucher("drink");
       });
     }
+    var aw = $("#add-wallet");
+    if (aw) aw.addEventListener("click", function () { var t = $("#app .app-toast"); if (t) t.remove(); S.sheet = "wallet"; renderOverlay(); bindOverlay(); });
+    var iw = $(".in-wallet");
+    if (iw) { iw.style.cursor = "pointer"; iw.addEventListener("click", function () { S.sheet = "wallet"; renderOverlay(); bindOverlay(); }); }
     document.querySelectorAll("[data-go]").forEach(function (b) { b.addEventListener("click", function () { S.tab = b.dataset.go; render(); $("#screen").scrollTop = 0; }); });
     document.querySelectorAll("[data-perk]").forEach(function (p) {
       var go = function () { openVoucher(p.dataset.perk === "bday" ? "bday" : "drink"); };
@@ -507,6 +581,13 @@ p { margin: 0; }
     bindOverlay();
   }
   function bindOverlay() {
+    var wa = $("#w-add");
+    [$("#w-cancel"), $("#w-cancel2")].forEach(function (b) { if (b) b.addEventListener("click", function () { S.sheet = null; renderOverlay(); }); });
+    if (wa) wa.addEventListener("click", function () {
+      S.inWallet = true; S.sheet = null;
+      log("<b>" + esc(S.name) + "</b> added their card to Apple Wallet");
+      render(); appToast("Added to Apple Wallet.");
+    });
     var r = $("#staff-redeem"), c = $("#sheet-close"), sc = $("#scrim");
     var close = function () { S.sheet = null; renderOverlay(); };
     if (c) c.addEventListener("click", close);
@@ -532,6 +613,7 @@ p { margin: 0; }
       ["Welcome drink voucher", joined ? "Sent to " + name + " when they joined" : "Sent the moment a guest joins", joined ? "on" : "wait", joined ? "Sent" : "Ready"],
       ["Birthday treat", joined ? "Goes to " + name + " the week of " + esc(S.bday) + (S.bdayWeek ? ", sent" : "") : "Goes out the week of each birthday", S.bdayWeek ? "on" : "wait", S.bdayWeek ? "Sent" : "Scheduled"],
       ["Google review request", joined && S.drinkUsed ? "Sent to " + name + " the morning after the visit" : "Morning after every first visit", joined && S.drinkUsed ? "on" : "wait", joined && S.drinkUsed ? "Queued" : "Ready"],
+      ["Wallet card updates", S.inWallet ? "Lock-screen message on every tier change and birthday treat. Free, no WhatsApp cost" : "Starts when the guest adds the card to Apple Wallet", S.inWallet ? "on" : "wait", S.inWallet ? "Live" : "Ready"],
       ["We miss you", "Offer after 30 days without a visit, if they opted in", "wait", "Watching"],
       ["VIP host alert", "Owner is told when a Black member books", tierFor(S.visits) >= 2 ? "on" : "wait", tierFor(S.visits) >= 2 ? "Active" : "Ready"]
     ];
@@ -542,15 +624,17 @@ p { margin: 0; }
     if (S.screen === "join") { appToast("Join the list on the phone first."); return; }
     var before = tierFor(S.visits); S.visits++; var after = tierFor(S.visits);
     log("<b>" + esc(S.name) + "</b> checked in · visit " + S.visits + (after > before ? " · upgraded to <b>" + TIERS[after].name + "</b>" : ""));
-    if (after > before) appToast("You're now " + TIERS[after].name + ". New perks unlocked.");
     render();
+    if (after > before) { if (S.inWallet) lockNote("You're now " + TIERS[after].name + " at " + venue.name + "."); else appToast("You're now " + TIERS[after].name + ". New perks unlocked."); }
+    else lockNote("Visits: " + S.visits);
   });
   $("#sim-bday").addEventListener("click", function () {
     if (S.screen === "join") { appToast("Join the list on the phone first."); return; }
     if (S.bdayWeek) return;
     S.bdayWeek = true; S.tab = "home";
     log("Birthday automation sent to <b>" + esc(S.name) + "</b> on WhatsApp");
-    render(); appToast("It's your birthday week. A treat is waiting.");
+    render();
+    if (S.inWallet) lockNote("Birthday treat waiting"); else appToast("It's your birthday week. A treat is waiting.");
   });
   $("#sim-reset").addEventListener("click", function () { S = fresh(); feed = []; renderFeed(); render(); });
 
