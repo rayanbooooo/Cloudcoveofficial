@@ -1,0 +1,600 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Private Guest List Demo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:wght@500;600;700&family=Manrope:wght@400;500;600;700&family=JetBrains+Mono:wght@500&display=swap">
+<style>
+/* Layout: phone mockup (the venue's members app) on the left; two working panels on the right: "Make it theirs" (rebrand by link) and "What the venue sees" (live log + automations). Stacks on phones with the app first.
+   The page frame follows the viewer's theme; the app inside the phone is deliberately always dark, in the venue's own palette. */
+:root {
+  --bg: #F2F3F1;
+  --surface: #FFFFFF;
+  --surface-2: #E8EAE7;
+  --ink: #15181A;
+  --muted: #5A625F;
+  --line: #D8DCD8;
+  --accent: #00785A;
+  --good: #1E7B3C;
+  --font-display: "Cormorant Garamond", "Didot", Georgia, serif;
+  --font-body: "Manrope", "Helvetica Neue", system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, Menlo, monospace;
+  color-scheme: light;
+
+  /* venue app palette (overwritten per theme by script) */
+  --app-bg: #0D0D0F;
+  --app-card: #17171B;
+  --app-line: #2A2A30;
+  --app-ink: #F4EFE6;
+  --app-muted: #A39D92;
+  --app-gold: #D4B27A;
+  --app-gold-ink: #1A1408;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0E1113; --surface: #161A1D; --surface-2: #1F2427; --ink: #E8EBE9; --muted: #98A19D; --line: #2A3135;
+    --accent: #2EA885; --good: #4CC27A; color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0E1113; --surface: #161A1D; --surface-2: #1F2427; --ink: #E8EBE9; --muted: #98A19D; --line: #2A3135;
+  --accent: #2EA885; --good: #4CC27A; color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body { background: var(--bg); color: var(--ink); font: 15px/1.55 var(--font-body); -webkit-font-smoothing: antialiased; }
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+h1, h2, h3 { margin: 0; text-wrap: balance; }
+p { margin: 0; }
+.eyebrow { font-size: 11.5px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); }
+
+.page { max-width: 1140px; margin: 0 auto; padding-inline: 20px; padding-block: 28px 56px; }
+.top { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: end; gap: 12px 24px; margin-bottom: 26px; }
+.top h1 { font-family: var(--font-display); font-weight: 700; font-size: clamp(30px, 4.4vw, 44px); line-height: 1.05; }
+.top p { color: var(--muted); max-width: 58ch; margin-top: 6px; }
+.brand { font-weight: 700; font-size: 14px; display: flex; align-items: center; gap: 8px; }
+.brand i { width: 10px; height: 10px; border-radius: 50%; background: var(--accent); display: inline-block; }
+
+.stage { display: grid; grid-template-columns: 390px minmax(0, 1fr); gap: 32px; align-items: start; }
+@media (max-width: 900px) { .stage { grid-template-columns: minmax(0, 1fr); } }
+
+/* ---------------- phone + app ---------------- */
+.phone { width: 100%; max-width: 390px; margin: 0 auto; background: #050506; border-radius: 46px; padding: 11px; box-shadow: 0 40px 80px -30px rgb(0 0 0 / .55); }
+.app {
+  position: relative; height: 760px; max-height: 86vh; min-height: 600px; border-radius: 36px; overflow: hidden;
+  background: var(--app-bg); color: var(--app-ink); display: flex; flex-direction: column;
+}
+.status { display: flex; justify-content: space-between; padding: 12px 26px 4px; font-size: 12.5px; font-weight: 600; color: var(--app-ink); }
+.screen { flex: 1; overflow-y: auto; padding: 8px 20px 20px; scrollbar-width: none; }
+.screen::-webkit-scrollbar { display: none; }
+.app h2 { font-family: var(--font-display); font-weight: 600; letter-spacing: .01em; }
+.app .label { font-size: 10.5px; letter-spacing: .18em; text-transform: uppercase; color: var(--app-muted); font-weight: 600; }
+.app .muted { color: var(--app-muted); }
+.monogram { width: 52px; height: 52px; border-radius: 50%; border: 1px solid var(--app-gold); color: var(--app-gold); display: grid; place-items: center; font-family: var(--font-display); font-size: 22px; font-weight: 700; letter-spacing: .04em; }
+.hairline { height: 1px; background: linear-gradient(90deg, transparent, var(--app-gold), transparent); opacity: .5; margin: 18px 0; }
+.gold-btn { width: 100%; border: 0; border-radius: 14px; padding: 14px; background: var(--app-gold); color: var(--app-gold-ink); font-weight: 700; letter-spacing: .02em; }
+.line-btn { width: 100%; border: 1px solid var(--app-line); background: transparent; border-radius: 14px; padding: 12px; color: var(--app-ink); font-weight: 600; }
+.app input, .app select { width: 100%; background: var(--app-card); border: 1px solid var(--app-line); color: var(--app-ink); border-radius: 12px; padding: 11px 13px; }
+.app .f { display: grid; gap: 6px; }
+.app .row2 { display: grid; grid-template-columns: 1fr 1.3fr; gap: 8px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { border: 1px solid var(--app-line); background: transparent; color: var(--app-ink); border-radius: 99px; padding: 6px 12px; font-size: 13px; }
+.chip[aria-pressed="true"] { border-color: var(--app-gold); color: var(--app-gold); background: color-mix(in srgb, var(--app-gold) 12%, transparent); }
+.check { display: grid; grid-template-columns: 20px 1fr; gap: 10px; font-size: 12.5px; color: var(--app-muted); align-items: start; }
+.check input { width: 18px; height: 18px; padding: 0; accent-color: var(--app-gold); margin-top: 2px; }
+
+/* join */
+.join-hero { text-align: center; display: grid; justify-items: center; gap: 10px; padding-top: 18px; }
+.join-hero h2 { font-size: 34px; line-height: 1.05; }
+.drink { margin: 18px 0; padding: 16px; border-radius: 16px; border: 1px solid color-mix(in srgb, var(--app-gold) 45%, transparent); text-align: center; background: color-mix(in srgb, var(--app-gold) 7%, transparent); }
+.drink b { font-family: var(--font-display); font-size: 22px; color: var(--app-gold); display: block; }
+.join-form { display: grid; gap: 12px; }
+
+/* home */
+.hello { display: flex; justify-content: space-between; align-items: center; margin: 6px 0 16px; }
+.hello h2 { font-size: 28px; }
+.mini-mono { width: 38px; height: 38px; font-size: 15px; }
+.card {
+  position: relative; border-radius: 20px; padding: 20px; overflow: hidden; aspect-ratio: 1.6; max-width: 100%;
+  display: flex; flex-direction: column; justify-content: space-between; color: var(--app-ink);
+  background: linear-gradient(135deg, var(--tier-a), var(--tier-b));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--app-gold) 40%, transparent);
+}
+.card::after { content: ""; position: absolute; inset: 0; background: repeating-linear-gradient(115deg, transparent 0 14px, rgb(255 255 255 / .025) 14px 15px); pointer-events: none; }
+.card .c-top { display: flex; justify-content: space-between; align-items: start; }
+.card .venue { font-family: var(--font-display); font-size: 20px; font-weight: 700; }
+.card .tier { font-size: 11px; font-weight: 700; letter-spacing: .2em; text-transform: uppercase; padding: 4px 10px; border-radius: 99px; border: 1px solid currentColor; color: var(--tier-ink); }
+.card .holder { font-size: 18px; font-weight: 600; letter-spacing: .04em; }
+.card .mid { font-family: var(--font-mono); font-size: 12px; color: var(--app-muted); letter-spacing: .14em; }
+.progress { margin-top: 14px; }
+.progress .bar { height: 4px; border-radius: 2px; background: var(--app-line); overflow: hidden; margin-top: 7px; }
+.progress .bar i { display: block; height: 100%; background: var(--app-gold); transition: width .5s ease; }
+.progress .meta { display: flex; justify-content: space-between; font-size: 12px; color: var(--app-muted); }
+.a2hs { margin-top: 14px; display: flex; gap: 10px; align-items: center; padding: 10px 12px; border-radius: 12px; background: var(--app-card); font-size: 12.5px; color: var(--app-muted); }
+.a2hs b { color: var(--app-ink); }
+.perks { display: grid; gap: 10px; margin-top: 16px; }
+.perk { display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; padding: 14px; border-radius: 14px; background: var(--app-card); border: 1px solid var(--app-line); }
+.perk b { display: block; font-size: 14.5px; }
+.perk span { font-size: 12.5px; color: var(--app-muted); }
+.perk .tag { font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; padding: 4px 9px; border-radius: 99px; white-space: nowrap; }
+.tag.ready { background: var(--app-gold); color: var(--app-gold-ink); border: 0; }
+.tag.lock { color: var(--app-muted); border: 1px solid var(--app-line); background: transparent; }
+.tag.used { color: var(--app-muted); background: transparent; border: 0; }
+.perk.ready { border-color: color-mix(in srgb, var(--app-gold) 55%, transparent); cursor: pointer; }
+.section-title { margin: 22px 0 10px; display: flex; justify-content: space-between; align-items: baseline; }
+
+/* book */
+.days { display: grid; grid-auto-flow: column; grid-auto-columns: 62px; gap: 8px; overflow-x: auto; padding-bottom: 4px; scrollbar-width: none; }
+.day { border: 1px solid var(--app-line); background: var(--app-card); border-radius: 14px; padding: 9px 0; text-align: center; color: var(--app-ink); }
+.day small { display: block; font-size: 10.5px; color: var(--app-muted); text-transform: uppercase; letter-spacing: .1em; }
+.day b { font-size: 19px; font-family: var(--font-display); }
+.day[aria-pressed="true"], .time[aria-pressed="true"] { border-color: var(--app-gold); background: color-mix(in srgb, var(--app-gold) 14%, var(--app-card)); }
+.times { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+.time { border: 1px solid var(--app-line); background: var(--app-card); border-radius: 12px; padding: 10px 0; font-family: var(--font-mono); font-size: 13px; color: var(--app-ink); }
+.stepper { display: flex; align-items: center; justify-content: space-between; padding: 10px 14px; border-radius: 14px; background: var(--app-card); border: 1px solid var(--app-line); }
+.stepper button { width: 34px; height: 34px; border-radius: 50%; border: 1px solid var(--app-line); background: transparent; color: var(--app-ink); font-size: 18px; line-height: 1; }
+.stepper b { font-family: var(--font-display); font-size: 22px; }
+.confirm { text-align: center; display: grid; gap: 10px; justify-items: center; padding-top: 30px; }
+.confirm .tick { width: 64px; height: 64px; border-radius: 50%; border: 1px solid var(--app-gold); color: var(--app-gold); display: grid; place-items: center; font-size: 28px; }
+
+/* events */
+.event { border-radius: 16px; overflow: hidden; border: 1px solid var(--app-line); background: var(--app-card); margin-bottom: 12px; }
+.event .art { height: 92px; position: relative; background: var(--ev); }
+.event .art span { position: absolute; left: 14px; bottom: 10px; font-family: var(--font-display); font-size: 26px; font-weight: 700; color: #fff; text-shadow: 0 2px 12px rgb(0 0 0 / .4); }
+.event .art em { position: absolute; right: 12px; top: 10px; font-style: normal; font-size: 10.5px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; color: #fff; background: rgb(0 0 0 / .35); padding: 3px 8px; border-radius: 99px; }
+.event .body { padding: 12px 14px 14px; display: grid; grid-template-columns: 1fr auto; gap: 10px; align-items: center; }
+.event .body b { display: block; font-size: 14.5px; }
+.event .body span { font-size: 12.5px; color: var(--app-muted); }
+.rsvp { border: 1px solid var(--app-gold); color: var(--app-gold); background: transparent; border-radius: 99px; padding: 7px 14px; font-weight: 700; font-size: 12.5px; white-space: nowrap; }
+.rsvp[aria-pressed="true"] { background: var(--app-gold); color: var(--app-gold-ink); }
+
+/* tab bar + overlays */
+.tabbar { display: grid; grid-template-columns: repeat(4, 1fr); border-top: 1px solid var(--app-line); background: color-mix(in srgb, var(--app-bg) 92%, #000); padding: 8px 6px 18px; }
+.tabbar button { border: 0; background: transparent; color: var(--app-muted); display: grid; justify-items: center; gap: 3px; font-size: 11px; font-weight: 600; }
+.tabbar svg { width: 21px; height: 21px; }
+.tabbar button[aria-selected="true"] { color: var(--app-gold); }
+.sheet {
+  position: absolute; inset: auto 0 0 0; background: var(--app-card); border-radius: 26px 26px 0 0; padding: 22px 22px 28px;
+  border-top: 1px solid color-mix(in srgb, var(--app-gold) 40%, transparent); display: grid; gap: 12px; text-align: center; z-index: 4;
+  animation: up .28s ease-out;
+}
+.scrim { position: absolute; inset: 0; background: rgb(0 0 0 / .55); z-index: 3; }
+@keyframes up { from { transform: translateY(40px); opacity: .3; } to { transform: none; opacity: 1; } }
+.sheet .code { font-family: var(--font-mono); font-size: 30px; letter-spacing: .14em; color: var(--app-gold); }
+.sheet .timer { font-family: var(--font-mono); font-size: 13px; color: var(--app-muted); }
+.app-toast { position: absolute; left: 16px; right: 16px; top: 44px; z-index: 6; background: var(--app-gold); color: var(--app-gold-ink); border-radius: 14px; padding: 11px 14px; font-weight: 700; font-size: 13.5px; text-align: center; animation: up .25s ease-out; }
+@media (prefers-reduced-motion: reduce) { .sheet, .app-toast { animation: none; } .progress .bar i { transition: none; } }
+.concept { text-align: center; font-size: 10.5px; color: var(--app-muted); letter-spacing: .08em; padding: 14px 0 2px; }
+
+/* ---------------- side panels ---------------- */
+.side { display: grid; gap: 20px; min-width: 0; }
+.panel { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 20px; min-width: 0; }
+.panel h3 { font-size: 17px; font-weight: 700; }
+.panel > p { color: var(--muted); font-size: 14px; margin-top: 4px; }
+.form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 16px; }
+@media (max-width: 520px) { .form { grid-template-columns: minmax(0, 1fr); } }
+.fld { display: grid; gap: 5px; font-size: 13px; min-width: 0; }
+.fld label, .fld .lbl { font-weight: 600; }
+.fld input, .fld select { width: 100%; border: 1px solid var(--line); background: var(--bg); border-radius: 10px; padding: 9px 11px; }
+.swatches { display: flex; gap: 8px; flex-wrap: wrap; }
+.sw { width: 44px; height: 30px; border-radius: 8px; border: 2px solid transparent; padding: 0; overflow: hidden; display: grid; grid-template-columns: 1fr 1fr; }
+.sw[aria-pressed="true"] { border-color: var(--ink); }
+.sw i { display: block; }
+.linkbox { margin-top: 14px; display: flex; gap: 8px; }
+.linkbox input { flex: 1; min-width: 0; border: 1px solid var(--line); background: var(--bg); border-radius: 10px; padding: 9px 11px; font-family: var(--font-mono); font-size: 12.5px; }
+.btn { border: 0; background: var(--ink); color: var(--bg); border-radius: 10px; padding: 9px 14px; font-weight: 700; white-space: nowrap; }
+.btn.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+.hint { font-size: 12.5px; color: var(--muted); margin-top: 8px; }
+.sim { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
+
+.feed { list-style: none; padding: 0; margin: 14px 0 0; display: grid; gap: 0; max-height: 300px; overflow-y: auto; }
+.feed li { display: grid; grid-template-columns: 54px minmax(0, 1fr); gap: 10px; padding: 9px 0; border-top: 1px solid var(--line); font-size: 13.5px; }
+.feed li:first-child { border-top: 0; }
+.feed time { font-family: var(--font-mono); font-size: 12px; color: var(--muted); padding-top: 1px; }
+.feed b { font-weight: 600; }
+.feed .new { animation: hl 1.4s ease-out; }
+@keyframes hl { from { background: color-mix(in srgb, var(--accent) 18%, transparent); } to { background: transparent; } }
+.autos { display: grid; gap: 8px; margin-top: 14px; }
+.auto { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 11px 13px; border: 1px solid var(--line); border-radius: 12px; font-size: 13.5px; }
+.auto b { display: block; }
+.auto span { color: var(--muted); font-size: 12.5px; }
+.pill { font-size: 11.5px; font-weight: 700; padding: 3px 9px; border-radius: 99px; white-space: nowrap; }
+.pill.on { color: var(--good); background: color-mix(in srgb, var(--good) 14%, transparent); }
+.pill.wait { color: var(--muted); background: var(--surface-2); }
+.empty { color: var(--muted); font-size: 13.5px; padding: 10px 0; }
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="top">
+    <div>
+      <div class="brand"><i></i>CloudCove · The Private Guest List</div>
+      <h1 id="page-title">A members app for Saltline</h1>
+      <p>Tap through it like a guest would. Then use the panel on the right to rebrand it for any venue and copy a link you can send to that venue's owner.</p>
+    </div>
+  </div>
+
+  <div class="stage">
+    <div class="phone" aria-label="Members app preview">
+      <div class="app" id="app">
+        <div class="status"><span id="clock">21:04</span><span>5G ▮▮▮</span></div>
+        <div class="screen" id="screen"></div>
+        <nav class="tabbar" id="tabbar" role="tablist" aria-label="App sections" hidden>
+          <button role="tab" data-tab="home" aria-selected="true"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M3 11l9-7 9 7v9a1 1 0 0 1-1 1h-5v-6h-6v6H4a1 1 0 0 1-1-1z"/></svg>Home</button>
+          <button role="tab" data-tab="book" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg>Book</button>
+          <button role="tab" data-tab="events" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 3l2.6 5.6 6 .6-4.5 4 1.3 6-5.4-3.1L6.6 19.2l1.3-6-4.5-4 6-.6z"/></svg>Events</button>
+          <button role="tab" data-tab="perks" aria-selected="false"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="8" width="18" height="13" rx="2"/><path d="M12 8v13M3 12h18M12 8c-2-4-6-4-6-1s6 1 6 1 6 2 6-1-4-3-6 1z"/></svg>Perks</button>
+        </nav>
+        <div id="overlay"></div>
+      </div>
+    </div>
+
+    <div class="side">
+      <div class="panel">
+        <h3>Make it theirs</h3>
+        <p>Type a prospect's venue and the app rebrands instantly. The link carries the venue name, area and colours, so they open their own version.</p>
+        <div class="form">
+          <div class="fld"><label for="p-name">Venue name</label><input id="p-name" value="Saltline" maxlength="28" autocomplete="off"></div>
+          <div class="fld"><label for="p-area">Area</label><input id="p-area" value="Palm Jumeirah" maxlength="24" autocomplete="off"></div>
+          <div class="fld"><label for="p-type">Venue type</label>
+            <select id="p-type">
+              <option value="beach">Beach club</option>
+              <option value="dining">Fine dining</option>
+              <option value="lounge">Lounge or rooftop</option>
+            </select>
+          </div>
+          <div class="fld"><span class="lbl" id="sw-label">Colours</span><div class="swatches" role="group" aria-labelledby="sw-label" id="swatches"></div></div>
+        </div>
+        <div class="linkbox">
+          <label for="p-link" class="eyebrow" hidden>Link for this venue</label>
+          <input id="p-link" readonly>
+          <button class="btn" id="copy" type="button">Copy link</button>
+        </div>
+        <p class="hint" id="copy-hint">Send it with: "I built this for your venue. Take 30 seconds and join your own guest list."</p>
+      </div>
+
+      <div class="panel">
+        <h3>What the venue sees</h3>
+        <p>Every guest action lands in the owner's dashboard as it happens.</p>
+        <ul class="feed" id="feed"></ul>
+        <div class="sim">
+          <button class="btn ghost" id="sim-visit" type="button">Simulate a return visit</button>
+          <button class="btn ghost" id="sim-bday" type="button">Jump to birthday week</button>
+          <button class="btn ghost" id="sim-reset" type="button">Start over</button>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3>Running on autopilot</h3>
+        <p>Set up once at install. Nobody at the venue touches these.</p>
+        <div class="autos" id="autos"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+  var $ = function (s) { return document.querySelector(s); };
+  var esc = function (s) { return String(s).replace(/[&<>"']/g, function (c) { return ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" })[c]; }); };
+
+  /* ---------- venue themes (the app is always dark, in the venue's palette) ---------- */
+  var THEMES = {
+    gold:    { name: "Champagne", bg: "#0D0D0F", card: "#17171B", line: "#2A2A30", ink: "#F4EFE6", muted: "#A39D92", gold: "#D4B27A", goldInk: "#1A1408", a: "#1D1A15", b: "#3A2F1E" },
+    emerald: { name: "Emerald",   bg: "#08130F", card: "#0F1F19", line: "#1E3329", ink: "#ECF2EE", muted: "#93A69C", gold: "#C9A45C", goldInk: "#14110A", a: "#0E2A20", b: "#1D4636" },
+    rose:    { name: "Rose",      bg: "#130C10", card: "#1E1419", line: "#33242C", ink: "#F6ECEF", muted: "#AE98A1", gold: "#E2A99A", goldInk: "#2A120D", a: "#2A1620", b: "#4A2634" },
+    ocean:   { name: "Ocean",     bg: "#0A0F17", card: "#111A26", line: "#1F2C3D", ink: "#EEF2F7", muted: "#94A1B3", gold: "#E3C89A", goldInk: "#1B150B", a: "#122238", b: "#1F3B5C" }
+  };
+  var TIERS = [
+    { name: "Silver", at: 0, a: "#2A2B2E", b: "#4A4C52", ink: "#E3E5EA" },
+    { name: "Gold",   at: 3, a: null, b: null, ink: null },
+    { name: "Black",  at: 6, a: "#050505", b: "#1C1C1C", ink: "#F4EFE6" }
+  ];
+  var TYPES = {
+    beach:  { drink: "A sunset spritz or fresh cooler", events: [["Full Moon Beach Night", "Sat · DJ set from 8 PM", "linear-gradient(135deg,#F28C5B,#6B3E8C)"], ["NYE on the Sand", "31 Dec · members first", "linear-gradient(135deg,#1B2A4A,#C9A45C)"], ["Sunrise Yoga & Brunch", "Sun · 7 AM", "linear-gradient(135deg,#F6C28B,#4FA3A5)"]], interests: ["Pool & beach", "Brunch", "Sunset sessions", "Live DJ", "Family days"] },
+    dining: { drink: "A glass of champagne or a signature mocktail", events: [["Chef's Table", "Thu · 8 seats only", "linear-gradient(135deg,#3B2416,#B07A3E)"], ["NYE Tasting Menu", "31 Dec · 9 courses", "linear-gradient(135deg,#141414,#C9A45C)"], ["Wine & Truffle Night", "Fri · members only", "linear-gradient(135deg,#4A1D2A,#9C6B4E)"]], interests: ["Tasting menus", "Wine", "Business dinners", "Date night", "Private dining"] },
+    lounge: { drink: "A house signature cocktail or mocktail", events: [["Rooftop Sessions", "Fri · live sax from 9 PM", "linear-gradient(135deg,#1A1F3A,#7A4DA8)"], ["NYE Skyline Party", "31 Dec · fireworks view", "linear-gradient(135deg,#0B0B14,#D4B27A)"], ["Ladies' Night", "Wed · members get a table", "linear-gradient(135deg,#5A1E3C,#E2A99A)"]], interests: ["Rooftop views", "Live music", "Shisha", "Cocktails", "Late nights"] }
+  };
+
+  /* ---------- venue config from link: #Venue-Name_Area-Name_type_theme ---------- */
+  var venue = { name: "Saltline", area: "Palm Jumeirah", type: "beach", theme: "ocean" };
+  function readHash() {
+    var h = decodeURIComponent((location.hash || "").slice(1));
+    if (!h) return;
+    var p = h.split("_");
+    if (p[0]) venue.name = p[0].replace(/-/g, " ").slice(0, 28);
+    if (p[1]) venue.area = p[1].replace(/-/g, " ").slice(0, 24);
+    if (p[2] && TYPES[p[2]]) venue.type = p[2];
+    if (p[3] && THEMES[p[3]]) venue.theme = p[3];
+  }
+  function slug(s) { return s.trim().replace(/[^A-Za-z0-9 ]+/g, "").replace(/\s+/g, "-"); }
+  function linkFor() {
+    var base = location.href.split("#")[0];
+    return base + "#" + [slug(venue.name) || "Venue", slug(venue.area) || "Dubai", venue.type, venue.theme].join("_");
+  }
+  function initials(n) {
+    var w = n.trim().split(/\s+/).filter(Boolean);
+    return ((w[0] || "V")[0] + (w[1] ? w[1][0] : "")).toUpperCase();
+  }
+
+  function applyTheme() {
+    var t = THEMES[venue.theme], r = document.documentElement.style;
+    r.setProperty("--app-bg", t.bg); r.setProperty("--app-card", t.card); r.setProperty("--app-line", t.line);
+    r.setProperty("--app-ink", t.ink); r.setProperty("--app-muted", t.muted); r.setProperty("--app-gold", t.gold); r.setProperty("--app-gold-ink", t.goldInk);
+    TIERS[1].a = t.a; TIERS[1].b = t.b; TIERS[1].ink = t.gold;
+    $("#page-title").textContent = "A members app for " + venue.name;
+  }
+
+  /* ---------- guest state ---------- */
+  var S;
+  function fresh() {
+    return { screen: "join", tab: "home", name: "", phone: "", bday: "", interests: [], consent: true,
+      visits: 0, code: "", voucherAt: 0, drinkUsed: false, bdayWeek: false, bdayUsed: false,
+      book: { day: 1, time: "20:00", guests: 4, done: false }, rsvp: {}, sheet: null, member: "" };
+  }
+  var feed = [];
+  function now() { return new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }); }
+  function log(html) { feed.unshift({ t: now(), html: html, fresh: true }); renderFeed(); }
+  function tierFor(v) { return v >= 6 ? 2 : v >= 3 ? 1 : 0; }
+
+  var toastT;
+  function appToast(t) {
+    var el = document.createElement("div"); el.className = "app-toast"; el.textContent = t;
+    $("#app").appendChild(el); clearTimeout(toastT); toastT = setTimeout(function () { el.remove(); }, 2400);
+  }
+
+  /* ---------- screens ---------- */
+  function render() {
+    var scr = $("#screen");
+    $("#tabbar").hidden = S.screen === "join";
+    document.querySelectorAll("#tabbar [data-tab]").forEach(function (b) { b.setAttribute("aria-selected", b.dataset.tab === S.tab); });
+    if (S.screen === "join") scr.innerHTML = joinView();
+    else scr.innerHTML = ({ home: homeView, book: bookView, events: eventsView, perks: perksView })[S.tab]();
+    scr.insertAdjacentHTML("beforeend", '<div class="concept">CONCEPT FOR ' + esc(venue.name.toUpperCase()) + " · BY CLOUDCOVE</div>");
+    renderOverlay(); bind(); renderAutos();
+  }
+
+  function joinView() {
+    var T = TYPES[venue.type], mo = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+    var days = ""; for (var d = 1; d <= 31; d++) days += "<option" + (d === 14 ? " selected" : "") + ">" + d + "</option>";
+    return '<div class="join-hero"><div class="monogram">' + esc(initials(venue.name)) + '</div><div class="label">' + esc(venue.area) + '</div><h2>' + esc(venue.name) + '<br>Private Guest List</h2><p class="muted" style="font-size:14px">Members are remembered. Birthdays are celebrated. The best tables go to members first.</p></div>' +
+      '<div class="drink"><div class="label">Your welcome drink</div><b>On the house tonight</b><span class="muted" style="font-size:13px">' + T.drink + "</span></div>" +
+      '<form class="join-form" id="join">' +
+      '<div class="f"><label class="label" for="j-name">First name</label><input id="j-name" value="Sara" maxlength="24" autocomplete="off" required></div>' +
+      '<div class="f"><label class="label" for="j-phone">WhatsApp number</label><input id="j-phone" value="+971 50 123 4417" inputmode="tel" autocomplete="off"></div>' +
+      '<div class="f"><span class="label">Birthday</span><div class="row2"><select id="j-day" aria-label="Birthday day">' + days + '</select><select id="j-month" aria-label="Birthday month">' + mo.map(function (m, i) { return '<option value="' + i + '"' + (i === 10 ? " selected" : "") + ">" + m + "</option>"; }).join("") + "</select></div></div>" +
+      '<div class="f"><span class="label">You come here for</span><div class="chips">' + T.interests.map(function (x, i) { return '<button type="button" class="chip" data-int="' + i + '" aria-pressed="' + (i < 2) + '">' + x + "</button>"; }).join("") + "</div></div>" +
+      '<label class="check"><input type="checkbox" id="j-consent" checked><span>Send me member invites and offers on WhatsApp. At most twice a month, and you can opt out anytime. Your drink does not depend on this.</span></label>' +
+      '<button class="gold-btn" type="submit">Join and claim my drink</button></form>';
+  }
+
+  function cardHTML() {
+    var ti = tierFor(S.visits), t = TIERS[ti], next = TIERS[ti + 1];
+    var style = "--tier-a:" + t.a + ";--tier-b:" + t.b + ";--tier-ink:" + t.ink;
+    var prog = next ? '<div class="progress"><div class="meta"><span>' + S.visits + " visit" + (S.visits === 1 ? "" : "s") + "</span><span>" + (next.at - S.visits) + " more for " + next.name + '</span></div><div class="bar"><i style="width:' + Math.min(100, (S.visits - t.at) / (next.at - t.at) * 100) + '%"></i></div></div>'
+      : '<div class="progress"><div class="meta"><span>' + S.visits + ' visits</span><span>Highest tier reached</span></div><div class="bar"><i style="width:100%"></i></div></div>';
+    return '<div class="card" style="' + style + '"><div class="c-top"><div><div class="venue">' + esc(venue.name) + '</div><div class="label" style="margin-top:2px">' + esc(venue.area) + '</div></div><span class="tier">' + t.name + '</span></div>' +
+      '<div><div class="mid">MEMBER ' + S.member + '</div><div class="holder">' + esc(S.name.toUpperCase()) + "</div></div></div>" + prog;
+  }
+
+  function homeView() {
+    return '<div class="hello"><div><div class="label">Good evening</div><h2>' + esc(S.name) + '</h2></div><div class="monogram mini-mono">' + esc(initials(venue.name)) + "</div></div>" +
+      cardHTML() +
+      '<div class="a2hs"><span style="font-size:18px">⊕</span><span><b>Add to Home Screen</b> to keep your card one tap away.</span></div>' +
+      '<div class="section-title"><div class="label">Your perks</div></div>' + perkList(true) +
+      '<div class="section-title"><div class="label">Next for members</div><button class="chip" data-go="events">All events</button></div>' + eventCard(0) +
+      '<button class="line-btn" data-go="book" style="margin-top:4px">Book a table</button>';
+  }
+
+  function perkList(short) {
+    var tier = tierFor(S.visits), list = [];
+    list.push({ k: "drink", b: "Welcome drink", s: S.drinkUsed ? "Enjoyed on your first visit" : "Tonight, on the house", st: S.drinkUsed ? "used" : "ready" });
+    list.push({ k: "bday", b: "Birthday treat", s: S.bdayUsed ? "Enjoyed. Happy birthday!" : S.bdayWeek ? "Dessert and a glass of something sparkling" : "Unlocks the week of " + S.bday, st: S.bdayUsed ? "used" : S.bdayWeek ? "ready" : "lock" });
+    list.push({ k: "gold", b: "Priority booking on weekends", s: tier >= 1 ? "Active for Gold members" : "Unlocks at Gold (3 visits)", st: tier >= 1 ? "on" : "lock" });
+    if (!short) list.push({ k: "black", b: "Private host and best table", s: tier >= 2 ? "Your host will message you before each visit" : "Unlocks at Black (6 visits)", st: tier >= 2 ? "on" : "lock" });
+    if (!short) list.push({ k: "plus", b: "Bring a friend, their first drink is free", s: "Share your member link", st: "on" });
+    return '<div class="perks">' + list.map(function (p) {
+      var tag = p.st === "ready" ? '<span class="tag ready">Show</span>' : p.st === "used" ? '<span class="tag used">Used</span>' : p.st === "on" ? '<span class="tag used">Active</span>' : '<span class="tag lock">Locked</span>';
+      return '<div class="perk' + (p.st === "ready" ? " ready" : "") + '"' + (p.st === "ready" ? ' data-perk="' + p.k + '" role="button" tabindex="0"' : "") + "><div><b>" + p.b + "</b><span>" + p.s + "</span></div>" + tag + "</div>";
+    }).join("") + "</div>";
+  }
+
+  function eventCard(i) {
+    var e = TYPES[venue.type].events[i], on = !!S.rsvp[i];
+    return '<div class="event"><div class="art" style="--ev:' + e[2] + '"><span>' + e[0] + "</span><em>Members</em></div>" +
+      '<div class="body"><div><b>' + e[0] + "</b><span>" + e[1] + '</span></div><button class="rsvp" data-rsvp="' + i + '" aria-pressed="' + on + '">' + (on ? "You're in" : "Request a spot") + "</button></div></div>";
+  }
+  function eventsView() {
+    return '<div class="hello"><div><div class="label">Members first</div><h2>Events</h2></div></div>' +
+      TYPES[venue.type].events.map(function (_, i) { return eventCard(i); }).join("") +
+      '<p class="muted" style="font-size:12.5px">Members get first access 48 hours before public release.</p>';
+  }
+  function perksView() {
+    return '<div class="hello"><div><div class="label">' + TIERS[tierFor(S.visits)].name + ' member</div><h2>Perks</h2></div></div>' + cardHTML() + perkList(false);
+  }
+
+  function bookView() {
+    var b = S.book;
+    if (b.done) {
+      var d = dayList()[b.day];
+      return '<div class="confirm"><div class="tick">✓</div><div class="label">Booking confirmed</div><h2 style="font-size:30px">' + d.long + "</h2>" +
+        '<p class="muted">' + b.time + " · " + b.guests + " guests · " + esc(venue.name) + '</p><p class="muted" style="font-size:13px;max-width:28ch">A reminder will reach you on WhatsApp the morning of your visit.</p>' +
+        '<button class="line-btn" id="book-again" style="margin-top:12px">Make another booking</button></div>';
+    }
+    return '<div class="hello"><div><div class="label">Reserve</div><h2>Book a table</h2></div></div>' +
+      '<div class="label" style="margin-bottom:8px">Day</div><div class="days">' + dayList().map(function (d, i) { return '<button class="day" data-day="' + i + '" aria-pressed="' + (i === b.day) + '"><small>' + d.dow + "</small><b>" + d.d + "</b></button>"; }).join("") + "</div>" +
+      '<div class="label" style="margin:16px 0 8px">Time</div><div class="times">' + ["13:00", "15:30", "18:00", "19:30", "20:00", "21:30"].map(function (t) { return '<button class="time" data-time="' + t + '" aria-pressed="' + (t === b.time) + '">' + t + "</button>"; }).join("") + "</div>" +
+      '<div class="label" style="margin:16px 0 8px">Guests</div><div class="stepper"><button id="g-minus" aria-label="Fewer guests">−</button><b>' + b.guests + '</b><button id="g-plus" aria-label="More guests">+</button></div>' +
+      (tierFor(S.visits) >= 1 ? '<p class="muted" style="font-size:12.5px;margin-top:10px">Gold priority: your request skips the waitlist.</p>' : "") +
+      '<button class="gold-btn" id="book-go" style="margin-top:16px">Request this table</button>';
+  }
+  function dayList() {
+    var out = [], base = new Date();
+    for (var i = 0; i < 7; i++) {
+      var d = new Date(base.getFullYear(), base.getMonth(), base.getDate() + i);
+      out.push({ dow: i === 0 ? "Today" : d.toLocaleDateString("en-GB", { weekday: "short" }), d: d.getDate(), long: d.toLocaleDateString("en-GB", { weekday: "long", day: "numeric", month: "long" }) });
+    }
+    return out;
+  }
+
+  /* ---------- overlay: voucher sheets ---------- */
+  var timerI;
+  function renderOverlay() {
+    var o = $("#overlay"); clearInterval(timerI);
+    if (!S.sheet) { o.innerHTML = ""; return; }
+    var isBday = S.sheet === "bday";
+    o.innerHTML = '<div class="scrim" id="scrim"></div><div class="sheet" role="dialog" aria-label="Voucher">' +
+      '<div class="label">' + (isBday ? "Birthday treat" : "Welcome drink") + '</div><h2 style="font-size:28px">' + (isBday ? "Happy birthday, " + esc(S.name) : "Show this to your server") + "</h2>" +
+      '<div class="code">' + S.code + '</div><div class="timer" id="timer">Valid for 30:00 · one use</div>' +
+      '<button class="gold-btn" id="staff-redeem">Staff: tap to redeem</button><button class="line-btn" id="sheet-close">Later</button></div>';
+    timerI = setInterval(function () {
+      var el = document.getElementById("timer"); if (!el) return clearInterval(timerI);
+      var left = Math.max(0, 1800 - Math.floor((Date.now() - S.voucherAt) / 1000));
+      el.textContent = "Valid for " + String(Math.floor(left / 60)).padStart(2, "0") + ":" + String(left % 60).padStart(2, "0") + " · one use";
+    }, 1000);
+  }
+  function newCode() { return initials(venue.name).slice(0, 2) + "-" + (1000 + Math.floor(Math.random() * 9000)); }
+  function openVoucher(kind) { S.sheet = kind; S.code = newCode(); S.voucherAt = Date.now(); renderOverlay(); bindOverlay(); }
+
+  /* ---------- events ---------- */
+  function bind() {
+    var j = $("#join");
+    if (j) {
+      document.querySelectorAll("[data-int]").forEach(function (c) { c.addEventListener("click", function () { c.setAttribute("aria-pressed", c.getAttribute("aria-pressed") !== "true"); }); });
+      j.addEventListener("submit", function (e) {
+        e.preventDefault();
+        var name = $("#j-name").value.trim(); if (!name) { $("#j-name").focus(); return; }
+        var mo = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+        S.name = name.charAt(0).toUpperCase() + name.slice(1);
+        S.phone = $("#j-phone").value;
+        S.bday = $("#j-day").value + " " + mo[+$("#j-month").value];
+        S.interests = Array.prototype.filter.call(document.querySelectorAll("[data-int]"), function (c) { return c.getAttribute("aria-pressed") === "true"; }).map(function (c) { return c.textContent; });
+        S.consent = $("#j-consent").checked;
+        S.member = String(1000 + Math.floor(Math.random() * 9000)) + " " + String(10 + Math.floor(Math.random() * 89));
+        S.screen = "app"; S.tab = "home";
+        log("<b>" + esc(S.name) + "</b> joined from table 12 · birthday " + esc(S.bday) + (S.interests.length ? " · " + esc(S.interests.join(", ")) : "") + (S.consent ? " · <b>opted in</b>" : " · drink only, no marketing"));
+        render(); openVoucher("drink");
+      });
+    }
+    document.querySelectorAll("[data-go]").forEach(function (b) { b.addEventListener("click", function () { S.tab = b.dataset.go; render(); $("#screen").scrollTop = 0; }); });
+    document.querySelectorAll("[data-perk]").forEach(function (p) {
+      var go = function () { openVoucher(p.dataset.perk === "bday" ? "bday" : "drink"); };
+      p.addEventListener("click", go); p.addEventListener("keydown", function (e) { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); go(); } });
+    });
+    document.querySelectorAll("[data-rsvp]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var i = +b.dataset.rsvp; S.rsvp[i] = !S.rsvp[i];
+        if (S.rsvp[i]) { log("<b>" + esc(S.name) + "</b> requested a spot at " + TYPES[venue.type].events[i][0]); appToast("Request sent. The team will confirm on WhatsApp."); }
+        render();
+      });
+    });
+    document.querySelectorAll("[data-day]").forEach(function (b) { b.addEventListener("click", function () { S.book.day = +b.dataset.day; render(); }); });
+    document.querySelectorAll("[data-time]").forEach(function (b) { b.addEventListener("click", function () { S.book.time = b.dataset.time; render(); }); });
+    var m = $("#g-minus"), p = $("#g-plus"), go = $("#book-go"), again = $("#book-again");
+    if (m) m.addEventListener("click", function () { S.book.guests = Math.max(1, S.book.guests - 1); render(); });
+    if (p) p.addEventListener("click", function () { S.book.guests = Math.min(12, S.book.guests + 1); render(); });
+    if (go) go.addEventListener("click", function () {
+      S.book.done = true; var d = dayList()[S.book.day];
+      log("<b>Booking:</b> " + esc(S.name) + " · " + d.long + " at " + S.book.time + " · " + S.book.guests + " guests" + (tierFor(S.visits) >= 1 ? " · Gold priority" : ""));
+      render();
+    });
+    if (again) again.addEventListener("click", function () { S.book.done = false; render(); });
+    bindOverlay();
+  }
+  function bindOverlay() {
+    var r = $("#staff-redeem"), c = $("#sheet-close"), sc = $("#scrim");
+    var close = function () { S.sheet = null; renderOverlay(); };
+    if (c) c.addEventListener("click", close);
+    if (sc) sc.addEventListener("click", close);
+    if (r) r.addEventListener("click", function () {
+      var kind = S.sheet; S.sheet = null;
+      if (kind === "drink") { S.drinkUsed = true; S.visits = Math.max(S.visits, 1); log("Staff redeemed <b>" + S.code + "</b> · welcome drink for " + esc(S.name) + " · visit 1"); appToast("Enjoy your drink. Welcome to the list."); }
+      else { S.bdayUsed = true; log("Staff redeemed <b>" + S.code + "</b> · birthday treat for " + esc(S.name)); appToast("Happy birthday from all of us."); }
+      render();
+    });
+  }
+
+  /* ---------- side panels ---------- */
+  function renderFeed() {
+    var f = $("#feed");
+    f.innerHTML = feed.length ? feed.map(function (e) { return "<li" + (e.fresh ? ' class="new"' : "") + "><time>" + e.t + "</time><span>" + e.html + "</span></li>"; }).join("")
+      : '<li class="empty" style="display:block">Nothing yet. Join the list on the phone to see the first entry arrive.</li>';
+    feed.forEach(function (e) { e.fresh = false; });
+  }
+  function renderAutos() {
+    var joined = S.screen !== "join", name = esc(S.name || "the guest");
+    var rows = [
+      ["Welcome drink voucher", joined ? "Sent to " + name + " when they joined" : "Sent the moment a guest joins", joined ? "on" : "wait", joined ? "Sent" : "Ready"],
+      ["Birthday treat", joined ? "Goes to " + name + " the week of " + esc(S.bday) + (S.bdayWeek ? ", sent" : "") : "Goes out the week of each birthday", S.bdayWeek ? "on" : "wait", S.bdayWeek ? "Sent" : "Scheduled"],
+      ["Google review request", joined && S.drinkUsed ? "Sent to " + name + " the morning after the visit" : "Morning after every first visit", joined && S.drinkUsed ? "on" : "wait", joined && S.drinkUsed ? "Queued" : "Ready"],
+      ["We miss you", "Offer after 30 days without a visit, if they opted in", "wait", "Watching"],
+      ["VIP host alert", "Owner is told when a Black member books", tierFor(S.visits) >= 2 ? "on" : "wait", tierFor(S.visits) >= 2 ? "Active" : "Ready"]
+    ];
+    $("#autos").innerHTML = rows.map(function (r) { return '<div class="auto"><div><b>' + r[0] + "</b><span>" + r[1] + '</span></div><span class="pill ' + r[2] + '">' + r[3] + "</span></div>"; }).join("");
+  }
+
+  $("#sim-visit").addEventListener("click", function () {
+    if (S.screen === "join") { appToast("Join the list on the phone first."); return; }
+    var before = tierFor(S.visits); S.visits++; var after = tierFor(S.visits);
+    log("<b>" + esc(S.name) + "</b> checked in · visit " + S.visits + (after > before ? " · upgraded to <b>" + TIERS[after].name + "</b>" : ""));
+    if (after > before) appToast("You're now " + TIERS[after].name + ". New perks unlocked.");
+    render();
+  });
+  $("#sim-bday").addEventListener("click", function () {
+    if (S.screen === "join") { appToast("Join the list on the phone first."); return; }
+    if (S.bdayWeek) return;
+    S.bdayWeek = true; S.tab = "home";
+    log("Birthday automation sent to <b>" + esc(S.name) + "</b> on WhatsApp");
+    render(); appToast("It's your birthday week. A treat is waiting.");
+  });
+  $("#sim-reset").addEventListener("click", function () { S = fresh(); feed = []; renderFeed(); render(); });
+
+  /* ---------- rebrand controls ---------- */
+  var sw = $("#swatches");
+  Object.keys(THEMES).forEach(function (k) {
+    var t = THEMES[k], b = document.createElement("button");
+    b.type = "button"; b.className = "sw"; b.dataset.theme = k; b.setAttribute("aria-label", t.name); b.title = t.name;
+    b.innerHTML = '<i style="background:' + t.bg + '"></i><i style="background:' + t.gold + '"></i>';
+    b.addEventListener("click", function () { venue.theme = k; syncControls(); applyAll(); });
+    sw.appendChild(b);
+  });
+  function syncControls() {
+    $("#p-name").value = venue.name; $("#p-area").value = venue.area; $("#p-type").value = venue.type;
+    document.querySelectorAll(".sw").forEach(function (b) { b.setAttribute("aria-pressed", b.dataset.theme === venue.theme); });
+  }
+  function applyAll() {
+    applyTheme(); render(); $("#p-link").value = linkFor();
+    try { history.replaceState(null, "", "#" + linkFor().split("#")[1]); } catch (e) { /* frame may block it */ }
+  }
+  $("#p-name").addEventListener("input", function (e) { venue.name = e.target.value || "Your venue"; applyAll(); });
+  $("#p-area").addEventListener("input", function (e) { venue.area = e.target.value || "Dubai"; applyAll(); });
+  $("#p-type").addEventListener("change", function (e) { venue.type = e.target.value; applyAll(); });
+  $("#copy").addEventListener("click", function () {
+    var v = $("#p-link").value, hint = $("#copy-hint");
+    var done = function () { hint.textContent = "Copied. Paste it into your DM to " + venue.name + "."; };
+    try {
+      navigator.clipboard.writeText(v).then(done, function () { $("#p-link").select(); hint.textContent = "Copy is blocked here. The link is selected, so press Ctrl+C or Cmd+C."; });
+    } catch (e) { $("#p-link").select(); hint.textContent = "Copy is blocked here. The link is selected, so press Ctrl+C or Cmd+C."; }
+  });
+
+  document.querySelectorAll("#tabbar [data-tab]").forEach(function (b) {
+    b.addEventListener("click", function () { S.tab = b.dataset.tab; render(); $("#screen").scrollTop = 0; });
+  });
+
+  /* clock */
+  var tick = function () { $("#clock").textContent = new Date().toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }); };
+  tick(); setInterval(tick, 30000);
+
+  readHash();
+  S = fresh();
+  syncControls(); applyTheme(); renderFeed(); render(); $("#p-link").value = linkFor();
+  window.addEventListener("hashchange", function () { readHash(); syncControls(); applyAll(); });
+})();
+</script>
+</body>
+</html>
