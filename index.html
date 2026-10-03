@@ -1,1 +1,742 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>CloudCove Venue Demo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Instrument+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@500&family=IBM+Plex+Sans+Arabic:wght@400;600&display=swap">
+<style>
+/* Layout: sticky top bar with 3 tabs (guest → staff → dashboard); each view is a two-column stage that stacks on phones.
+   Look: night-time beach club. Deep harbour navy, pool-aqua accent, one warm sunset tone for money. */
+:root {
+  --bg: #F2F5F9;
+  --surface: #FFFFFF;
+  --surface-2: #E8EEF6;
+  --line: #D3DCE8;
+  --fg: #0D1626;
+  --muted: #56647E;
+  --accent: #0B8F8A;
+  --accent-ink: #FFFFFF;
+  --warm: #C85A1E;
+  --good: #15803D;
+  --warn: #A35A06;
+  --phone: #0D1626;
+  --font-display: "Bricolage Grotesque", "Avenir Next", system-ui, sans-serif;
+  --font-body: "Instrument Sans", "Segoe UI", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  --font-ar: "IBM Plex Sans Arabic", "Geeza Pro", Tahoma, sans-serif;
+  --r: 14px;
+  color-scheme: light;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0A111E; --surface: #111A2C; --surface-2: #19243C; --line: #26334F;
+    --fg: #E6ECF5; --muted: #8B98B2; --accent: #3FD0C9; --accent-ink: #062321;
+    --warm: #FFAD72; --good: #4ADE80; --warn: #FBBF24; --phone: #000000;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0A111E; --surface: #111A2C; --surface-2: #19243C; --line: #26334F;
+  --fg: #E6ECF5; --muted: #8B98B2; --accent: #3FD0C9; --accent-ink: #062321;
+  --warm: #FFAD72; --good: #4ADE80; --warn: #FBBF24; --phone: #000000;
+  color-scheme: dark;
+}
 
+* { box-sizing: border-box; }
+html, body { margin: 0; }
+body {
+  background: var(--bg); color: var(--fg);
+  font: 15px/1.55 var(--font-body);
+  -webkit-font-smoothing: antialiased;
+}
+h1, h2, h3 { font-family: var(--font-display); line-height: 1.15; text-wrap: balance; margin: 0; }
+button, input, select { font: inherit; color: inherit; }
+button { cursor: pointer; }
+:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.eyebrow { font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+
+/* top bar */
+.bar {
+  position: sticky; top: env(safe-area-inset-top, 0px); z-index: 10;
+  background: color-mix(in srgb, var(--bg) 88%, transparent);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  border-bottom: 1px solid var(--line);
+}
+.bar-in {
+  max-width: 1180px; margin: 0 auto; padding: 12px 20px;
+  display: flex; flex-wrap: wrap; align-items: center; gap: 12px 24px;
+}
+.brand { display: flex; align-items: center; gap: 10px; font-family: var(--font-display); font-weight: 800; font-size: 20px; letter-spacing: -.01em; }
+.brand-mark { width: 26px; height: 26px; }
+.demo-pill { font-size: 11px; font-weight: 600; letter-spacing: .06em; text-transform: uppercase; padding: 3px 8px; border-radius: 99px; border: 1px solid var(--line); color: var(--muted); }
+.tabs { display: flex; gap: 4px; margin-left: auto; background: var(--surface-2); padding: 4px; border-radius: 12px; flex-wrap: wrap; }
+.tab {
+  border: 0; background: transparent; padding: 8px 14px; border-radius: 9px;
+  font-weight: 600; color: var(--muted); display: flex; align-items: center; gap: 8px;
+}
+.tab .step { font-family: var(--font-mono); font-size: 12px; opacity: .7; }
+.tab[aria-selected="true"] { background: var(--surface); color: var(--fg); box-shadow: 0 1px 2px rgb(0 0 0 / .12); }
+
+main { max-width: 1180px; margin: 0 auto; padding: 28px 20px 64px; }
+.view-head { display: flex; flex-wrap: wrap; align-items: end; justify-content: space-between; gap: 12px 32px; margin-bottom: 24px; }
+.view-head h1 { font-size: clamp(26px, 4vw, 38px); font-weight: 800; letter-spacing: -.02em; max-width: 22ch; }
+.view-head p { margin: 6px 0 0; color: var(--muted); max-width: 60ch; }
+.next-btn {
+  border: 0; background: var(--accent); color: var(--accent-ink); font-weight: 600;
+  padding: 10px 16px; border-radius: 10px; white-space: nowrap;
+}
+.ghost-btn { border: 1px solid var(--line); background: var(--surface); padding: 9px 14px; border-radius: 10px; font-weight: 600; }
+
+/* ---------- guest view ---------- */
+.stage { display: grid; grid-template-columns: minmax(0, 400px) minmax(0, 1fr); gap: 32px; align-items: start; }
+@media (max-width: 860px) { .stage { grid-template-columns: minmax(0, 1fr); } }
+
+.phone {
+  background: var(--phone); border-radius: 40px; padding: 12px;
+  box-shadow: 0 30px 60px -20px rgb(8 20 40 / .45);
+  width: 100%; max-width: 400px; margin: 0 auto;
+}
+.screen { background: #ECE5DA; border-radius: 30px; overflow: hidden; display: flex; flex-direction: column; height: 680px; max-height: 80vh; min-height: 520px; }
+.chat-top { background: #0F3B3A; color: #fff; padding: 14px 16px; display: flex; align-items: center; gap: 12px; }
+.venue-ava { width: 38px; height: 38px; border-radius: 50%; background: linear-gradient(160deg, #FFB27A 0 45%, #3FD0C9 45% 100%); flex: none; }
+.chat-top b { display: block; font-size: 15px; }
+.chat-top small { opacity: .75; font-size: 12px; }
+.lang { margin-left: auto; display: flex; border: 1px solid rgb(255 255 255 / .35); border-radius: 8px; overflow: hidden; }
+.lang button { border: 0; background: transparent; color: #fff; padding: 4px 9px; font-size: 12px; font-weight: 600; }
+.lang button[aria-pressed="true"] { background: rgb(255 255 255 / .2); }
+.chat { flex: 1; overflow-y: auto; padding: 16px 12px; display: flex; flex-direction: column; gap: 8px; color: #111B21; }
+.chat[dir="rtl"] { font-family: var(--font-ar); }
+.msg { max-width: 82%; padding: 8px 11px 6px; border-radius: 10px; font-size: 14.5px; line-height: 1.45; box-shadow: 0 1px 1px rgb(0 0 0 / .08); animation: pop .22s ease-out; }
+.msg.bot { background: #FFFFFF; align-self: flex-start; border-start-start-radius: 2px; }
+.msg.me { background: #D2F4E8; align-self: flex-end; border-start-end-radius: 2px; }
+.msg time { display: block; text-align: end; font-size: 10.5px; color: #667781; margin-top: 2px; }
+@keyframes pop { from { transform: translateY(6px); opacity: .4; } to { transform: none; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .msg { animation: none; } }
+
+.reply { background: #F6F3EE; border-top: 1px solid #DDD5C8; padding: 10px; display: flex; flex-direction: column; gap: 8px; color: #111B21; }
+.reply[dir="rtl"] { font-family: var(--font-ar); }
+.row { display: flex; gap: 8px; }
+.reply input[type="text"], .reply select {
+  flex: 1; min-width: 0; border: 1px solid #D6CFC2; background: #fff; color: #111B21;
+  border-radius: 20px; padding: 9px 14px;
+}
+.send { border: 0; background: #0F7C78; color: #fff; border-radius: 20px; padding: 9px 16px; font-weight: 600; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip { border: 1px solid #C9C1B3; background: #fff; color: #111B21; border-radius: 99px; padding: 6px 12px; font-size: 13.5px; }
+.chip[aria-pressed="true"] { background: #0F7C78; border-color: #0F7C78; color: #fff; }
+.link-btn { border: 0; background: none; color: #0F7C78; font-weight: 600; padding: 4px; }
+
+.voucher {
+  align-self: stretch; background: #0F3B3A; color: #fff; border-radius: 16px; padding: 18px; margin-top: 6px;
+  display: grid; gap: 10px; text-align: center; animation: pop .3s ease-out;
+  background-image: radial-gradient(circle at 0 50%, #ECE5DA 9px, transparent 10px), radial-gradient(circle at 100% 50%, #ECE5DA 9px, transparent 10px);
+}
+.voucher .v-label { font-size: 12px; letter-spacing: .1em; text-transform: uppercase; opacity: .7; }
+.voucher .v-title { font-family: var(--font-display); font-size: 24px; font-weight: 800; }
+.voucher .v-code { font-family: var(--font-mono); font-size: 28px; letter-spacing: .12em; color: #FFB27A; }
+.voucher .v-timer { font-size: 13px; opacity: .85; }
+
+/* side panel */
+.side { display: grid; gap: 20px; min-width: 0; }
+.card { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 20px; min-width: 0; }
+.card h3 { font-size: 18px; font-weight: 700; margin-bottom: 4px; }
+.card > p { margin: 0 0 14px; color: var(--muted); font-size: 14px; }
+.profile { display: grid; grid-template-columns: max-content 1fr; gap: 10px 18px; margin: 0; }
+.profile dt { color: var(--muted); font-size: 13px; padding-top: 1px; }
+.profile dd { margin: 0; font-weight: 600; min-width: 0; overflow-wrap: anywhere; }
+.profile dd.empty { color: var(--muted); font-weight: 400; font-style: italic; }
+.tag { display: inline-block; font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 99px; background: color-mix(in srgb, var(--accent) 16%, transparent); color: var(--accent); margin: 0 4px 4px 0; }
+.tag.warm { background: color-mix(in srgb, var(--warm) 16%, transparent); color: var(--warm); }
+.tag.mute { background: var(--surface-2); color: var(--muted); }
+.flow { list-style: none; padding: 0; margin: 0; display: grid; gap: 12px; counter-reset: f; }
+.flow li { display: grid; grid-template-columns: 26px 1fr; gap: 10px; font-size: 14px; }
+.flow li::before { counter-increment: f; content: counter(f); font-family: var(--font-mono); font-size: 12px; width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; background: var(--surface-2); color: var(--muted); }
+.flow li.done::before { background: var(--accent); color: var(--accent-ink); }
+.flow li b { display: block; }
+.flow li span { color: var(--muted); }
+.note { font-size: 13px; color: var(--muted); border-top: 1px solid var(--line); padding-top: 12px; margin-top: 14px; }
+
+/* ---------- staff view ---------- */
+.tablet { background: var(--surface); border: 1px solid var(--line); border-radius: 22px; padding: 22px; min-width: 0; }
+.tablet-head { display: flex; flex-wrap: wrap; gap: 12px; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+.tablet-head h2 { font-size: 22px; font-weight: 800; }
+.code-entry { display: flex; gap: 8px; flex-wrap: wrap; }
+.code-entry input { font-family: var(--font-mono); letter-spacing: .1em; text-transform: uppercase; width: 150px; border: 1px solid var(--line); background: var(--bg); border-radius: 10px; padding: 9px 12px; }
+.claims { display: grid; gap: 10px; }
+.claim {
+  display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 14px; align-items: center;
+  padding: 14px; border-radius: 12px; border: 1px solid var(--line); background: var(--bg);
+}
+.claim.fresh { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 20%, transparent); }
+.claim .code { font-family: var(--font-mono); font-size: 17px; letter-spacing: .08em; color: var(--warm); }
+.claim .who b { display: block; }
+.claim .who small { color: var(--muted); }
+.claim .redeem { border: 0; background: var(--accent); color: var(--accent-ink); font-weight: 600; padding: 10px 16px; border-radius: 10px; }
+.claim.used { opacity: .6; }
+.claim.used .redeem { background: var(--surface-2); color: var(--muted); cursor: default; }
+@media (max-width: 520px) {
+  .claim { grid-template-columns: minmax(0, 1fr) auto; }
+  .claim .code { grid-column: 1 / -1; }
+}
+.empty-state { padding: 18px; text-align: center; color: var(--muted); border: 1px dashed var(--line); border-radius: 12px; }
+
+/* ---------- dashboard ---------- */
+.kpis { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 14px; margin-bottom: 20px; }
+@media (max-width: 900px) { .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.kpi { background: var(--surface); border: 1px solid var(--line); border-radius: var(--r); padding: 16px 18px; min-width: 0; }
+.kpi .v { font-family: var(--font-display); font-size: clamp(24px, 3vw, 32px); font-weight: 800; letter-spacing: -.02em; font-variant-numeric: tabular-nums; margin-top: 4px; }
+.kpi .d { font-size: 13px; color: var(--muted); }
+.kpi .d b { color: var(--good); font-weight: 600; }
+.kpi.money { background: color-mix(in srgb, var(--warm) 9%, var(--surface)); border-color: color-mix(in srgb, var(--warm) 35%, var(--line)); }
+.kpi.money .v { color: var(--warm); }
+
+.dash-grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 20px; margin-bottom: 20px; }
+@media (max-width: 900px) { .dash-grid { grid-template-columns: minmax(0, 1fr); } }
+.legend { display: flex; gap: 16px; font-size: 13px; color: var(--muted); margin-bottom: 8px; flex-wrap: wrap; }
+.legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 6px; vertical-align: -1px; }
+.chart svg { width: 100%; height: auto; display: block; }
+.chart text { fill: var(--muted); font: 11px var(--font-mono); }
+
+.roi-big { font-family: var(--font-display); font-size: 56px; font-weight: 800; color: var(--warm); letter-spacing: -.03em; line-height: 1; }
+.roi-line { display: flex; justify-content: space-between; gap: 12px; padding: 10px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+.roi-line:last-child { border-bottom: 0; }
+.roi-line span:first-child { color: var(--muted); }
+
+.table-wrap { overflow-x: auto; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; min-width: 620px; }
+th { text-align: left; font-size: 12px; font-weight: 600; letter-spacing: .05em; text-transform: uppercase; color: var(--muted); padding: 8px 10px; border-bottom: 1px solid var(--line); }
+td { padding: 12px 10px; border-bottom: 1px solid var(--line); }
+tr:last-child td { border-bottom: 0; }
+td.r, th.r { text-align: right; }
+.status { font-size: 12px; font-weight: 600; padding: 2px 8px; border-radius: 99px; }
+.status.live { color: var(--good); background: color-mix(in srgb, var(--good) 14%, transparent); }
+.status.sched { color: var(--warn); background: color-mix(in srgb, var(--warn) 14%, transparent); }
+.bar-mini { height: 6px; border-radius: 3px; background: var(--surface-2); overflow: hidden; margin-top: 4px; }
+.bar-mini > i { display: block; height: 100%; background: var(--accent); }
+
+.guests { display: grid; gap: 2px; }
+.guest { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 10px 0; border-bottom: 1px solid var(--line); }
+.guest:last-child { border-bottom: 0; }
+.ava { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center; font-weight: 700; font-size: 13px; background: var(--surface-2); color: var(--fg); }
+.guest .meta { min-width: 0; }
+.guest .meta b { display: block; }
+.guest .meta small { color: var(--muted); }
+.guest .when { font-size: 12px; color: var(--muted); text-align: right; }
+.guest.new { animation: flash 1.6s ease-out; }
+@keyframes flash { from { background: color-mix(in srgb, var(--accent) 22%, transparent); } to { background: transparent; } }
+
+.composer { display: grid; gap: 12px; }
+.composer label { font-size: 13px; color: var(--muted); display: grid; gap: 6px; }
+.composer select { border: 1px solid var(--line); background: var(--bg); border-radius: 10px; padding: 9px 12px; }
+.preview-msg { background: #ECE5DA; border-radius: 12px; padding: 12px; color: #111B21; }
+.preview-msg .msg { max-width: 100%; animation: none; }
+.est { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; font-size: 13px; color: var(--muted); }
+.est b { color: var(--fg); }
+
+.toast {
+  position: fixed; left: 50%; bottom: calc(20px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%) translateY(20px);
+  background: var(--fg); color: var(--bg); padding: 12px 18px; border-radius: 12px; font-weight: 600; font-size: 14px;
+  opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; max-width: calc(100% - 32px); text-align: center; z-index: 20;
+}
+.toast.show { opacity: 1; transform: translateX(-50%); }
+.foot { margin-top: 36px; color: var(--muted); font-size: 13px; text-align: center; }
+</style>
+</head>
+<body>
+
+<header class="bar">
+  <div class="bar-in">
+    <div class="brand">
+      <svg class="brand-mark" viewBox="0 0 26 26" aria-hidden="true">
+        <circle cx="13" cy="13" r="12" fill="var(--accent)"/>
+        <path d="M4 15c3-2 6 2 9 0s6 2 9 0v5a9 9 0 0 1-18 0z" fill="var(--warm)"/>
+      </svg>
+      CloudCove
+      <span class="demo-pill">Demo</span>
+    </div>
+    <nav class="tabs" role="tablist" aria-label="Demo views">
+      <button class="tab" role="tab" id="tab-guest" aria-controls="view-guest" aria-selected="true"><span class="step">1</span>Guest</button>
+      <button class="tab" role="tab" id="tab-staff" aria-controls="view-staff" aria-selected="false"><span class="step">2</span>Staff</button>
+      <button class="tab" role="tab" id="tab-dash" aria-controls="view-dash" aria-selected="false"><span class="step">3</span>Venue dashboard</button>
+    </nav>
+  </div>
+</header>
+
+<main>
+  <!-- ============ 1. GUEST ============ -->
+  <section id="view-guest" role="tabpanel" aria-labelledby="tab-guest">
+    <div class="view-head">
+      <div>
+        <div class="eyebrow">Step 1 · What the guest sees</div>
+        <h1>Scan the table QR. Claim a welcome drink in 30 seconds.</h1>
+        <p>No app to download and no form to fill. The guest chats on WhatsApp, and you get a real profile with consent attached.</p>
+      </div>
+      <button class="next-btn" data-go="staff">Next: staff redeem →</button>
+    </div>
+
+    <div class="stage">
+      <div class="phone">
+        <div class="screen">
+          <div class="chat-top">
+            <div class="venue-ava" aria-hidden="true"></div>
+            <div><b>Saltline Beach Club</b><small id="online-label">Business account · online</small></div>
+            <div class="lang" role="group" aria-label="Language">
+              <button id="lang-en" aria-pressed="true">EN</button>
+              <button id="lang-ar" aria-pressed="false">عربي</button>
+            </div>
+          </div>
+          <div class="chat" id="chat" aria-live="polite"></div>
+          <div class="reply" id="reply"></div>
+        </div>
+      </div>
+
+      <div class="side">
+        <div class="card">
+          <h3>What the venue captures, live</h3>
+          <p>This fills in as the guest replies. Try typing in the phone.</p>
+          <dl class="profile" id="profile"></dl>
+        </div>
+        <div class="card">
+          <h3>How the claim works</h3>
+          <ol class="flow" id="flow">
+            <li data-k="0"><div><b>Scan</b><span>QR on the table, bar or sunbed opens a WhatsApp chat.</span></div></li>
+            <li data-k="1"><div><b>Name and birthday</b><span>Birthday drives the most profitable campaign you'll run.</span></div></li>
+            <li data-k="2"><div><b>Interests</b><span>Brunch, nightlife, pool. You segment on this later.</span></div></li>
+            <li data-k="3"><div><b>Consent</b><span>Separate opt-in for offers, recorded with a timestamp.</span></div></li>
+            <li data-k="4"><div><b>Voucher</b><span>One-time code, expires in 30 minutes, redeemed by staff.</span></div></li>
+          </ol>
+          <div class="note">The drink is never conditional on marketing consent. That keeps venues on the right side of UAE data protection rules, and opt-in rates still run above 80%.</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 2. STAFF ============ -->
+  <section id="view-staff" role="tabpanel" aria-labelledby="tab-staff" hidden>
+    <div class="view-head">
+      <div>
+        <div class="eyebrow">Step 2 · What staff see on the bar tablet</div>
+        <h1>One tap to redeem. No training needed.</h1>
+        <p>Servers see each claim as it comes in. Codes are single-use and expire, so nobody screenshots a voucher and shares it around.</p>
+      </div>
+      <button class="next-btn" data-go="dash">Next: venue dashboard →</button>
+    </div>
+
+    <div class="tablet">
+      <div class="tablet-head">
+        <div>
+          <div class="eyebrow">Saltline Beach Club · Main bar</div>
+          <h2>Welcome drink claims</h2>
+        </div>
+        <form class="code-entry" id="code-form">
+          <label class="eyebrow" for="code-input" style="align-self:center">Code</label>
+          <input id="code-input" placeholder="SLB-0000" maxlength="8" autocomplete="off">
+          <button class="ghost-btn" type="submit">Redeem code</button>
+        </form>
+      </div>
+      <div class="claims" id="claims"></div>
+    </div>
+  </section>
+
+  <!-- ============ 3. DASHBOARD ============ -->
+  <section id="view-dash" role="tabpanel" aria-labelledby="tab-dash" hidden>
+    <div class="view-head">
+      <div>
+        <div class="eyebrow">Step 3 · What the owner sees · Last 30 days</div>
+        <h1>Every free drink, traced to the dirhams it brought back.</h1>
+        <p>Guests come back through WhatsApp offers, redeem at the bar, and the revenue lands here.</p>
+      </div>
+      <button class="ghost-btn" data-go="guest">↺ Run the guest flow again</button>
+    </div>
+
+    <div class="kpis">
+      <div class="kpi"><div class="eyebrow">Guests captured</div><div class="v" id="k-guests">979</div><div class="d"><b>+18%</b> vs previous 30 days</div></div>
+      <div class="kpi"><div class="eyebrow">Opted in to offers</div><div class="v" id="k-optin">87%</div><div class="d" id="k-optin-d">852 reachable on WhatsApp</div></div>
+      <div class="kpi"><div class="eyebrow">Came back</div><div class="v">419</div><div class="d"><b>43%</b> return rate</div></div>
+      <div class="kpi money"><div class="eyebrow">Revenue from campaigns</div><div class="v">AED 132,200</div><div class="d">Tracked from redeemed offers</div></div>
+    </div>
+
+    <div class="dash-grid">
+      <div class="card chart">
+        <h3>New guests vs. returning guests</h3>
+        <p>Weekly, last 8 weeks. Returning guests grow as the list grows.</p>
+        <div class="legend"><span><i style="background:var(--accent)"></i>New guests captured</span><span><i style="background:var(--warm)"></i>Returned via an offer</span></div>
+        <div id="chart"></div>
+      </div>
+      <div class="card">
+        <h3>Return on CloudCove</h3>
+        <p>What the owner actually cares about.</p>
+        <div class="roi-big num">29×</div>
+        <div style="color:var(--muted);font-size:14px;margin:6px 0 12px">return on the monthly fee</div>
+        <div class="roi-line"><span>Revenue from campaigns</span><b class="num">AED 132,200</b></div>
+        <div class="roi-line"><span>CloudCove plan</span><b class="num">AED 4,500</b></div>
+        <div class="roi-line"><span>WhatsApp message costs</span><b class="num">AED 1,120</b></div>
+        <div class="roi-line"><span>Welcome drinks given (cost)</span><b class="num">AED 7,830</b></div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-bottom:20px">
+      <h3>Campaigns</h3>
+      <p>Sent on WhatsApp to opted-in guests. Revenue counts only offers redeemed at the venue.</p>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>Campaign</th><th>Audience</th><th class="r">Sent</th><th>Redeemed</th><th class="r">Revenue</th><th>Status</th></tr></thead>
+          <tbody id="campaigns"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="dash-grid">
+      <div class="card">
+        <h3>Latest guests</h3>
+        <p>Newest first. Your demo claim shows up here once staff redeem it.</p>
+        <div class="guests" id="guests"></div>
+      </div>
+      <div class="card">
+        <h3>Send a campaign</h3>
+        <p>Pick who and what. CloudCove estimates the return before you send.</p>
+        <div class="composer">
+          <label for="seg">Audience
+            <select id="seg">
+              <option value="brunch">Brunch lovers, not seen in 30 days</option>
+              <option value="night">Nightlife, visited 2+ times</option>
+              <option value="bday">Birthdays in the next 14 days</option>
+            </select>
+          </label>
+          <div class="preview-msg"><div class="msg bot" id="preview"></div></div>
+          <div class="est" id="est"></div>
+          <button class="next-btn" id="send-campaign" type="button">Schedule for Thursday 4:00 PM</button>
+        </div>
+      </div>
+    </div>
+
+    <div class="foot">Demo with sample data. Saltline Beach Club is a fictional venue.</div>
+  </section>
+</main>
+
+<div class="toast" id="toast" role="status"></div>
+
+<script>
+(function () {
+  "use strict";
+  var $ = function (s) { return document.querySelector(s); };
+  var esc = function (s) { return String(s).replace(/[&<>"']/g, function (c) { return ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"})[c]; }); };
+  var fmt = function (n) { return n.toLocaleString("en-US"); };
+
+  /* ---------- tabs ---------- */
+  var views = { guest: "view-guest", staff: "view-staff", dash: "view-dash" };
+  function go(name) {
+    Object.keys(views).forEach(function (k) {
+      document.getElementById(views[k]).hidden = k !== name;
+      document.getElementById("tab-" + k).setAttribute("aria-selected", k === name ? "true" : "false");
+    });
+    if (name === "guest" && state.step >= 4) resetGuest();
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }
+  Object.keys(views).forEach(function (k) {
+    document.getElementById("tab-" + k).addEventListener("click", function () { go(k); });
+  });
+  document.querySelectorAll("[data-go]").forEach(function (b) {
+    b.addEventListener("click", function () { go(b.dataset.go); });
+  });
+
+  var toastT;
+  function toast(t) {
+    var el = $("#toast"); el.textContent = t; el.classList.add("show");
+    clearTimeout(toastT); toastT = setTimeout(function () { el.classList.remove("show"); }, 2600);
+  }
+
+  /* ---------- guest chat ---------- */
+  var T = {
+    en: {
+      online: "Business account · online",
+      hi: "Hi! Welcome to Saltline Beach Club. Your welcome drink is on us. What's your first name?",
+      namePh: "Type your name", send: "Send",
+      bday: function (n) { return "Nice to meet you, " + n + ". When's your birthday? We'll send you a treat that week."; },
+      skip: "Skip",
+      months: ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"],
+      interests: "What do you come to Saltline for? Pick any.",
+      opts: { brunch: "Brunch", pool: "Pool & beach", night: "Nightlife", music: "Live music", shisha: "Shisha", family: "Family days" },
+      cont: "Continue",
+      consent: "Can we message you about events and offers? Max 2 a month. Reply STOP anytime.",
+      yes: "Yes, keep me posted", no: "Just the drink, thanks",
+      done: "Done! Show this to your server.",
+      vLabel: "Welcome drink", vTitle: "On the house", vTimer: "Valid for 30:00 · one use",
+      restart: "Restart demo"
+    },
+    ar: {
+      online: "حساب تجاري · متصل",
+      hi: "أهلاً بك في سولتلاين بيتش كلوب! مشروب الترحيب علينا. ما اسمك الأول؟",
+      namePh: "اكتب اسمك", send: "إرسال",
+      bday: function (n) { return "تشرفنا يا " + n + ". متى عيد ميلادك؟ سنرسل لك مفاجأة في ذلك الأسبوع."; },
+      skip: "تخطي",
+      months: ["يناير","فبراير","مارس","أبريل","مايو","يونيو","يوليو","أغسطس","سبتمبر","أكتوبر","نوفمبر","ديسمبر"],
+      interests: "ما الذي يجذبك إلى سولتلاين؟ اختر ما تشاء.",
+      opts: { brunch: "برانش", pool: "المسبح والشاطئ", night: "السهرات", music: "موسيقى حية", shisha: "شيشة", family: "أيام العائلة" },
+      cont: "متابعة",
+      consent: "هل يمكننا مراسلتك بالفعاليات والعروض؟ رسالتان كحد أقصى شهرياً. أرسل STOP للإلغاء.",
+      yes: "نعم، أبقوني على اطلاع", no: "المشروب فقط، شكراً",
+      done: "تم! أظهر هذا للنادل.",
+      vLabel: "مشروب الترحيب", vTitle: "على حساب البيت", vTimer: "صالح لمدة 30:00 · استخدام واحد",
+      restart: "إعادة العرض"
+    }
+  };
+  var INTEREST_EN = T.en.opts;
+
+  var state;
+  function freshState() {
+    return { lang: state ? state.lang : "en", step: 0, name: "", bday: "", interests: [], consent: null, code: "", claimedAt: null, log: [] };
+  }
+  function now() { var d = new Date(); return d.toLocaleTimeString("en-GB", { hour: "2-digit", minute: "2-digit" }); }
+
+  function addLog(who, text) { state.log.push({ who: who, text: text, t: now() }); }
+
+  function renderChat() {
+    var L = T[state.lang];
+    var chat = $("#chat"), reply = $("#reply");
+    var dir = state.lang === "ar" ? "rtl" : "ltr";
+    chat.dir = dir; reply.dir = dir;
+    $("#online-label").textContent = L.online;
+
+    // Rebuild bot lines in current language so the toggle re-translates the whole thread.
+    var lines = [{ who: "bot", text: L.hi, t: state.log[0] ? state.log[0].t : now() }];
+    var i = 1;
+    function me(txt) { var e = state.log[i++]; lines.push({ who: "me", text: txt, t: e ? e.t : now() }); }
+    function bot(txt) { var e = state.log[i++]; lines.push({ who: "bot", text: txt, t: e ? e.t : now() }); }
+    if (state.step >= 1) { me(state.name); bot(L.bday(state.name)); }
+    if (state.step >= 2) { me(state.bday ? fmtBday(state.bday, L) : L.skip); bot(L.interests); }
+    if (state.step >= 3) { me(state.interests.length ? state.interests.map(function (k) { return L.opts[k]; }).join(", ") : L.skip); bot(L.consent); }
+    if (state.step >= 4) { me(state.consent ? L.yes : L.no); bot(L.done); }
+
+    chat.innerHTML = lines.map(function (m) {
+      return '<div class="msg ' + m.who + '">' + esc(m.text) + "<time>" + m.t + "</time></div>";
+    }).join("") + (state.step >= 4 ?
+      '<div class="voucher"><div class="v-label">' + L.vLabel + '</div><div class="v-title">' + L.vTitle + '</div><div class="v-code">' + state.code + '</div><div class="v-timer" id="v-timer">' + L.vTimer + "</div></div>" : "");
+    chat.scrollTop = chat.scrollHeight;
+
+    var h = "";
+    if (state.step === 0) {
+      h = '<form class="row" id="f-name"><input type="text" id="in-name" placeholder="' + L.namePh + '" value="Sara" maxlength="30" autocomplete="off"><button class="send">' + L.send + "</button></form>";
+    } else if (state.step === 1) {
+      var mo = L.months.map(function (m, k) { return '<option value="' + (k + 1) + '"' + (k === 10 ? " selected" : "") + ">" + m + "</option>"; }).join("");
+      var dd = ""; for (var d = 1; d <= 31; d++) dd += '<option' + (d === 14 ? " selected" : "") + ">" + d + "</option>";
+      h = '<form class="row" id="f-bday"><select id="in-day" aria-label="Day">' + dd + '</select><select id="in-month" aria-label="Month">' + mo + '</select><button class="send">' + L.send + '</button></form><button class="link-btn" id="skip-bday">' + L.skip + "</button>";
+    } else if (state.step === 2) {
+      h = '<div class="chips">' + Object.keys(L.opts).map(function (k) {
+        return '<button class="chip" data-int="' + k + '" aria-pressed="' + (state.interests.indexOf(k) > -1) + '">' + L.opts[k] + "</button>";
+      }).join("") + '</div><button class="send" id="int-go">' + L.cont + "</button>";
+    } else if (state.step === 3) {
+      h = '<div class="row"><button class="send" style="flex:1" id="c-yes">' + L.yes + '</button></div><div class="row"><button class="chip" style="flex:1" id="c-no">' + L.no + "</button></div>";
+    } else {
+      h = '<button class="link-btn" id="restart">' + L.restart + "</button>";
+    }
+    reply.innerHTML = h;
+    bindReply();
+    renderProfile();
+  }
+
+  function fmtBday(v, L) { var p = v.split("-"); return p[1] + " " + L.months[+p[0] - 1]; }
+
+  function bindReply() {
+    var f;
+    if ((f = $("#f-name"))) {
+      var inp = $("#in-name");
+      inp.addEventListener("input", function () { renderProfile(inp.value); });
+      f.addEventListener("submit", function (e) {
+        e.preventDefault(); var v = inp.value.trim(); if (!v) { inp.focus(); return; }
+        state.name = v.charAt(0).toUpperCase() + v.slice(1); addLog("me"); addLog("bot"); state.step = 1; renderChat();
+      });
+    }
+    if ((f = $("#f-bday"))) {
+      f.addEventListener("submit", function (e) {
+        e.preventDefault(); state.bday = $("#in-month").value + "-" + $("#in-day").value; addLog("me"); addLog("bot"); state.step = 2; renderChat();
+      });
+      $("#skip-bday").addEventListener("click", function () { state.bday = ""; addLog("me"); addLog("bot"); state.step = 2; renderChat(); });
+    }
+    document.querySelectorAll("[data-int]").forEach(function (b) {
+      b.addEventListener("click", function () {
+        var k = b.dataset.int, ix = state.interests.indexOf(k);
+        if (ix > -1) state.interests.splice(ix, 1); else state.interests.push(k);
+        b.setAttribute("aria-pressed", ix === -1); renderProfile();
+      });
+    });
+    if ((f = $("#int-go"))) f.addEventListener("click", function () { addLog("me"); addLog("bot"); state.step = 3; renderChat(); });
+    var finish = function (c) {
+      state.consent = c; state.code = "SLB-" + String(Math.floor(1000 + Math.random() * 9000));
+      state.claimedAt = Date.now(); addLog("me"); addLog("bot"); state.step = 4;
+      claims.unshift({ code: state.code, name: state.name, interests: state.interests.slice(), consent: c, at: Date.now(), used: false, fresh: true });
+      renderChat(); renderClaims(); startTimer();
+      toast("New claim sent to the bar tablet");
+    };
+    if ((f = $("#c-yes"))) f.addEventListener("click", function () { finish(true); });
+    if ((f = $("#c-no"))) f.addEventListener("click", function () { finish(false); });
+    if ((f = $("#restart"))) f.addEventListener("click", resetGuest);
+  }
+
+  var timerI;
+  function startTimer() {
+    clearInterval(timerI);
+    timerI = setInterval(function () {
+      var el = document.getElementById("v-timer"); if (!el || !state.claimedAt) return;
+      var left = Math.max(0, 1800 - Math.floor((Date.now() - state.claimedAt) / 1000));
+      var mm = String(Math.floor(left / 60)).padStart(2, "0"), ss = String(left % 60).padStart(2, "0");
+      el.textContent = T[state.lang].vTimer.replace("30:00", mm + ":" + ss);
+    }, 1000);
+  }
+
+  function renderProfile(liveName) {
+    var name = liveName !== undefined ? liveName : state.name;
+    var row = function (k, v) { return "<dt>" + k + "</dt><dd" + (v ? "" : ' class="empty"') + ">" + (v || "waiting…") + "</dd>"; };
+    var ints = state.interests.map(function (k) { return '<span class="tag">' + INTEREST_EN[k] + "</span>"; }).join("");
+    var consent = state.consent === null ? "" : state.consent
+      ? '<span class="tag">Opted in</span><span class="tag mute">' + now() + " · WhatsApp</span>"
+      : '<span class="tag mute">Drink only, no marketing</span>';
+    $("#profile").innerHTML =
+      row("Name", esc(name.trim())) +
+      row("WhatsApp", state.step >= 1 || name ? '<span class="num">+971 50 ••• 4417</span>' : "") +
+      row("Language", state.lang === "ar" ? "Arabic" : "English") +
+      row("Birthday", state.bday ? fmtBday(state.bday, T.en) + ' <span class="tag warm">Birthday campaign</span>' : (state.step >= 2 ? "Skipped" : "")) +
+      row("Interests", ints) +
+      row("Marketing", consent) +
+      row("Source", "Table 12 QR · Saltline Beach Club") +
+      row("Voucher", state.code ? '<span class="num">' + state.code + "</span>" : "");
+    document.querySelectorAll("#flow li").forEach(function (li) { li.classList.toggle("done", +li.dataset.k < state.step || state.step >= 4); });
+  }
+
+  function resetGuest() { state = freshState(); addLog("bot"); clearInterval(timerI); renderChat(); }
+
+  ["en", "ar"].forEach(function (l) {
+    document.getElementById("lang-" + l).addEventListener("click", function () {
+      state.lang = l;
+      document.getElementById("lang-en").setAttribute("aria-pressed", l === "en");
+      document.getElementById("lang-ar").setAttribute("aria-pressed", l === "ar");
+      renderChat();
+    });
+  });
+
+  /* ---------- staff ---------- */
+  var claims = [
+    { code: "SLB-7302", name: "Omar", interests: ["night", "music"], consent: true, at: Date.now() - 4 * 60000, used: false },
+    { code: "SLB-5518", name: "Priya", interests: ["brunch", "pool"], consent: true, at: Date.now() - 11 * 60000, used: false },
+    { code: "SLB-2094", name: "Lukas", interests: ["pool"], consent: false, at: Date.now() - 26 * 60000, used: true }
+  ];
+  function ago(t) { var m = Math.round((Date.now() - t) / 60000); return m < 1 ? "just now" : m + " min ago"; }
+  function renderClaims() {
+    $("#claims").innerHTML = claims.length ? claims.map(function (c, i) {
+      return '<div class="claim' + (c.used ? " used" : "") + (c.fresh && !c.used ? " fresh" : "") + '">' +
+        '<div class="code">' + c.code + "</div>" +
+        '<div class="who"><b>' + esc(c.name) + " · Table 12</b><small>" + ago(c.at) + " · " +
+        (c.interests.length ? c.interests.map(function (k) { return INTEREST_EN[k]; }).join(", ") : "no interests picked") +
+        (c.consent ? " · opted in" : "") + "</small></div>" +
+        '<button class="redeem" data-ix="' + i + '"' + (c.used ? " disabled" : "") + ">" + (c.used ? "Redeemed" : "Redeem") + "</button></div>";
+    }).join("") : '<div class="empty-state">No open claims. Run the guest flow to create one.</div>';
+    document.querySelectorAll(".redeem[data-ix]").forEach(function (b) {
+      b.addEventListener("click", function () { redeem(+b.dataset.ix); });
+    });
+  }
+  var captured = 979, optedIn = 852;
+  function redeem(ix) {
+    var c = claims[ix]; if (!c || c.used) return;
+    c.used = true; c.fresh = false;
+    captured++; if (c.consent) optedIn++;
+    guests.unshift({ name: c.name, tags: c.interests.map(function (k) { return INTEREST_EN[k]; }), when: "Just now", note: c.consent ? "Opted in · welcome drink" : "Welcome drink", isNew: true });
+    renderClaims(); renderGuests(); renderKpis();
+    toast(c.name + "'s drink redeemed. Profile saved to the dashboard.");
+  }
+  $("#code-form").addEventListener("submit", function (e) {
+    e.preventDefault();
+    var v = $("#code-input").value.trim().toUpperCase();
+    if (/^\d{4}$/.test(v)) v = "SLB-" + v;
+    var ix = claims.findIndex(function (c) { return c.code === v; });
+    if (ix === -1) { toast("No claim with code " + (v || "—") + ". Check the code on the guest's phone."); return; }
+    if (claims[ix].used) { toast(v + " was already redeemed."); return; }
+    $("#code-input").value = ""; redeem(ix);
+  });
+
+  /* ---------- dashboard ---------- */
+  function renderKpis() {
+    $("#k-guests").textContent = fmt(captured);
+    $("#k-optin").textContent = Math.round(optedIn / captured * 100) + "%";
+    $("#k-optin-d").textContent = fmt(optedIn) + " reachable on WhatsApp";
+  }
+
+  var weeks = ["Aug 10", "Aug 17", "Aug 24", "Aug 31", "Sep 7", "Sep 14", "Sep 21", "Sep 28"];
+  var newG = [142, 168, 155, 190, 214, 236, 251, 278];
+  var retG = [38, 51, 49, 66, 83, 97, 110, 129];
+  (function chart() {
+    var W = 560, H = 240, padL = 34, padR = 8, padT = 10, padB = 26, max = 300;
+    var iw = W - padL - padR, ih = H - padT - padB, gw = iw / weeks.length, bw = Math.min(18, gw / 3);
+    var y = function (v) { return padT + ih - v / max * ih; };
+    var s = '<svg viewBox="0 0 ' + W + " " + H + '" role="img" aria-label="Weekly new and returning guests, last 8 weeks">';
+    [0, 100, 200, 300].forEach(function (t) {
+      s += '<line x1="' + padL + '" x2="' + (W - padR) + '" y1="' + y(t) + '" y2="' + y(t) + '" stroke="var(--line)" stroke-width="1"' + (t ? ' stroke-dasharray="2 4"' : "") + "/>";
+      s += '<text x="' + (padL - 6) + '" y="' + (y(t) + 4) + '" text-anchor="end">' + t + "</text>";
+    });
+    weeks.forEach(function (w, i) {
+      var cx = padL + gw * i + gw / 2, last = i === weeks.length - 1;
+      s += '<rect x="' + (cx - bw - 1) + '" y="' + y(newG[i]) + '" width="' + bw + '" height="' + (y(0) - y(newG[i])) + '" rx="3" fill="var(--accent)" opacity="' + (last ? 1 : .55) + '"><title>' + w + ": " + newG[i] + " new</title></rect>";
+      s += '<rect x="' + (cx + 1) + '" y="' + y(retG[i]) + '" width="' + bw + '" height="' + (y(0) - y(retG[i])) + '" rx="3" fill="var(--warm)" opacity="' + (last ? 1 : .55) + '"><title>' + w + ": " + retG[i] + " returned</title></rect>";
+      if (last) {
+        s += '<text x="' + (cx - bw / 2 - 1) + '" y="' + (y(newG[i]) - 5) + '" text-anchor="middle" style="fill:var(--fg)">' + newG[i] + "</text>";
+        s += '<text x="' + (cx + bw / 2 + 1) + '" y="' + (y(retG[i]) - 5) + '" text-anchor="middle" style="fill:var(--fg)">' + retG[i] + "</text>";
+      }
+      if (i % 2 === 1 || last) s += '<text x="' + cx + '" y="' + (H - 8) + '" text-anchor="middle">' + w + "</text>";
+    });
+    $("#chart").innerHTML = s + "</svg>";
+  })();
+
+  var campaigns = [
+    { n: "Friday brunch is back", a: "Brunch · not seen 30d", sent: 2210, red: 168, rev: 52080, st: "live" },
+    { n: "Thursday ladies' night", a: "Nightlife · opted in", sent: 1840, red: 212, rev: 38160, st: "live" },
+    { n: "Birthday week treat", a: "Birthdays · rolling", sent: 312, red: 74, rev: 27380, st: "live" },
+    { n: "Sunset pool day pass", a: "Pool & beach · residents", sent: 960, red: 81, rev: 14580, st: "live" },
+    { n: "Ramadan iftar preview", a: "All opted in", sent: 0, red: 0, rev: 0, st: "sched" }
+  ];
+  $("#campaigns").innerHTML = campaigns.map(function (c) {
+    var rate = c.sent ? c.red / c.sent * 100 : 0;
+    return "<tr><td><b>" + c.n + "</b></td><td>" + c.a + '</td><td class="r num">' + (c.sent ? fmt(c.sent) : "–") + "</td>" +
+      '<td><span class="num">' + (c.sent ? fmt(c.red) + " · " + rate.toFixed(1) + "%" : "–") + '</span><div class="bar-mini"><i style="width:' + Math.min(100, rate * 3) + '%"></i></div></td>' +
+      '<td class="r num">' + (c.rev ? "AED " + fmt(c.rev) : "–") + "</td>" +
+      '<td><span class="status ' + c.st + '">' + (c.st === "live" ? "Running" : "Scheduled") + "</span></td></tr>";
+  }).join("");
+
+  var guests = [
+    { name: "Omar", tags: ["Nightlife", "Live music"], when: "4 min ago", note: "Opted in · welcome drink" },
+    { name: "Priya", tags: ["Brunch", "Pool & beach"], when: "11 min ago", note: "Opted in · welcome drink" },
+    { name: "Lukas", tags: ["Pool & beach"], when: "26 min ago", note: "Welcome drink" },
+    { name: "Noura", tags: ["Brunch", "Family days"], when: "Yesterday", note: "3rd visit · birthday offer" },
+    { name: "James", tags: ["Nightlife"], when: "Yesterday", note: "2nd visit · ladies' night" }
+  ];
+  function renderGuests() {
+    $("#guests").innerHTML = guests.slice(0, 6).map(function (g) {
+      return '<div class="guest' + (g.isNew ? " new" : "") + '"><div class="ava">' + esc(g.name.charAt(0)) + '</div><div class="meta"><b>' + esc(g.name) + "</b><small>" +
+        g.note + "</small><div>" + g.tags.map(function (t) { return '<span class="tag mute">' + t + "</span>"; }).join("") + '</div></div><div class="when">' + g.when + "</div></div>";
+    }).join("");
+    guests.forEach(function (g) { g.isNew = false; });
+  }
+
+  var segs = {
+    brunch: { size: 640, rate: .076, spend: 310, msg: "Hi {name}, we've missed you at Saltline. Friday brunch is back with a new seafood station. Show this message for 20% off your table this week." },
+    night: { size: 410, rate: .115, spend: 180, msg: "Hey {name}, Thursday ladies' night returns with DJ Rami on the deck. Reply YES and we'll hold a table for you." },
+    bday: { size: 38, rate: .24, spend: 370, msg: "Happy birthday week, {name}! Your dessert and a glass of something sparkling are on us. Valid until Sunday." }
+  };
+  function renderComposer() {
+    var s = segs[$("#seg").value];
+    $("#preview").innerHTML = esc(s.msg.replace("{name}", "Noura")) + "<time>16:00</time>";
+    var back = Math.round(s.size * s.rate), rev = back * s.spend, cost = Math.round(s.size * 0.25);
+    $("#est").innerHTML = "<span>Reaches <b class=\"num\">" + fmt(s.size) + "</b> guests</span><span>Expected back <b class=\"num\">~" + back + "</b></span><span>Est. revenue <b class=\"num\">AED " + fmt(rev) + "</b></span><span>Message cost <b class=\"num\">AED " + fmt(cost) + "</b></span>";
+  }
+  $("#seg").addEventListener("change", renderComposer);
+  $("#send-campaign").addEventListener("click", function () { toast("Campaign scheduled for Thursday 4:00 PM (demo only, nothing is sent)"); });
+
+  /* ---------- boot ---------- */
+  state = null; state = freshState(); addLog("bot");
+  renderChat(); renderClaims(); renderGuests(); renderKpis(); renderComposer();
+})();
+</script>
+</body>
+</html>
