@@ -12,6 +12,10 @@
  *
  *   npm run demo                     # build the UI, start on http://127.0.0.1:8787
  *   DEMO_AUTOTRADE=1 npm run demo    # also switch autotrading on (fake paper account)
+ *
+ * Hosting the demo behind a public URL (e.g. a Vercel Sandbox): set HOST=0.0.0.0,
+ * PUBLIC_URL / ALLOWED_ORIGINS to that URL, COOKIE_SECURE=true and a strong
+ * DEMO_PASSWORD. It is still the fake broker: never give it real credentials.
  */
 import { DateTime } from 'luxon';
 import { buildServer } from '../../src/api/server.js';
@@ -26,6 +30,8 @@ import { fileURLToPath } from 'node:url';
 const NY = 'America/New_York';
 const SESSION_DATE = '2026-10-05'; // a Monday
 const PORT = Number(process.env.PORT ?? 8787);
+const HOST = process.env.HOST ?? '127.0.0.1';
+const PUBLIC_URL = process.env.PUBLIC_URL ?? `http://127.0.0.1:${PORT}`;
 const USER = process.env.DEMO_USER ?? 'demo';
 const PASSWORD = process.env.DEMO_PASSWORD ?? 'scalp-city-demo';
 const AUTOTRADE = ['1', 'true', 'yes'].includes((process.env.DEMO_AUTOTRADE ?? '').toLowerCase());
@@ -99,8 +105,10 @@ async function main(): Promise<void> {
     DATABASE_URL: 'pglite://memory', // the harness passes its own in-memory database below
     MAX_POSITION_SIZE: '5000',
     MAX_ORDER_NOTIONAL: '5000',
-    HOST: '127.0.0.1',
+    HOST,
     PORT: String(PORT),
+    ALLOWED_ORIGINS: process.env.ALLOWED_ORIGINS,
+    COOKIE_SECURE: process.env.COOKIE_SECURE,
     LOG_LEVEL: process.env.LOG_LEVEL ?? 'warn',
   });
   const logger = createLogger(config.logLevel, process.stdout.isTTY === true);
@@ -111,7 +119,7 @@ async function main(): Promise<void> {
 
   const webDist = fileURLToPath(new URL('../../../web/dist', import.meta.url));
   const { fastify } = await buildServer(app, { webDist });
-  await fastify.listen({ host: '127.0.0.1', port: PORT });
+  await fastify.listen({ host: HOST, port: PORT });
 
   // Synthetic tape: ~2.5 prints per second per symbol, official bars on the minute.
   const rnd = mulberry32(20261005);
@@ -152,7 +160,7 @@ async function main(): Promise<void> {
     '',
     '  ███ SCALP CITY · DEV HARNESS (synthetic market, fake broker, in-memory DB)',
     '  This is NOT paper trading on Alpaca and NOT live trading. No real broker is contacted.',
-    `  open        http://127.0.0.1:${PORT}`,
+    `  open        ${PUBLIC_URL}`,
     `  sign in     ${USER} / ${PASSWORD}`,
     `  session     ${SESSION_DATE} from ${START} New York (virtual clock, real-time speed)`,
     `  autotrade   ${AUTOTRADE ? 'ON (fake account)' : 'off — set DEMO_AUTOTRADE=1 to watch workers trade'}`,

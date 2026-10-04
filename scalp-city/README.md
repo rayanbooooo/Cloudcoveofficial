@@ -31,6 +31,12 @@ synthetic random-walk market, an in-memory PostgreSQL (PGlite) and a virtual clo
 session. It never contacts Alpaca, and the UI shows a `NON-STANDARD BROKER ENDPOINT` warning the
 whole time. The prices are synthetic and say nothing about real markets.
 
+To show the demo at a public URL (for example a Vercel Sandbox), start it with `HOST=0.0.0.0`,
+`PUBLIC_URL` and `ALLOWED_ORIGINS` set to that URL, `COOKIE_SECURE=true` and a strong
+`DEMO_PASSWORD`. Vercel's regular serverless hosting can't run this server: it needs a long-running
+process for its WebSocket, broker streams and timers. For real (paper or live) use, host it on an
+always-on Node host with PostgreSQL.
+
 ## Run against Alpaca PAPER
 
 Requirements: Node 22+, PostgreSQL 16 (Docker is easiest), Alpaca **paper** API keys.
