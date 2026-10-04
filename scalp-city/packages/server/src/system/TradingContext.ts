@@ -1,0 +1,394 @@
+import { DateTime } from 'luxon';
+import { maskAccountNumber, type HaltReason, type SystemPhase, type TradingEnvironment } from '@scalp-city/shared';
+import { AccountService } from '../account/AccountService.js';
+import type { AuditLog } from '../audit/AuditLog.js';
+import { AlpacaBrokerAdapter } from '../broker/alpaca/AlpacaBrokerAdapter.js';
+import type { BrokerAdapter, StreamStatus } from '../broker/types.js';
+import { assertLiveEndpoints, tradingBaseUrl, tradingStreamUrl, type AppConfig } from '../config/env.js';
+import type { Clock } from '../core/clock.js';
+import { sleep } from '../core/clock.js';
+import type { EventBus } from '../core/eventBus.js';
+import type { Logger } from '../core/logger.js';
+import type { Db } from '../db/db.js';
+import { MarketCalendar } from '../market/MarketCalendar.js';
+import { AlpacaMarketDataProvider } from '../marketdata/alpaca/AlpacaMarketDataProvider.js';
+import { MarketDataService } from '../marketdata/MarketDataService.js';
+import type { MarketDataProvider } from '../marketdata/types.js';
+import { ContractSelector } from '../options/ContractSelector.js';
+import { OrderEngine } from '../orders/OrderEngine.js';
+import { PositionLedger } from '../positions/PositionLedger.js';
+import { LiveRiskContext } from '../risk/RiskContext.js';
+import { RiskSettings } from '../risk/RiskSettings.js';
+import { CircuitBreakers } from '../safety/CircuitBreakers.js';
+import { Controls } from '../safety/Controls.js';
+import { LiveGate } from '../safety/LiveGate.js';
+import { Reconciler } from '../safety/Reconciler.js';
+import type { SettingsStore } from '../settings/SettingsStore.js';
+import { SignalRepository } from '../workers/SignalRepository.js';
+import { WorkerManager } from '../workers/WorkerManager.js';
+import { WorkerRepository } from '../workers/WorkerRepository.js';
+import { WorkerStatsService } from '../workers/WorkerStats.js';
+import { Alerts, Timeline } from './Timeline.js';
+
+export interface TradingContextOptions {
+  env: TradingEnvironment;
+  config: AppConfig;
+  db: Db;
+  bus: EventBus;
+  audit: AuditLog;
+  settings: SettingsStore;
+  clock: Clock;
+  logger: Logger;
+  /** Test seams. Production always uses the Alpaca implementations. */
+  brokerFactory?: (env: TradingEnvironment) => BrokerAdapter;
+  providerFactory?: (env: TradingEnvironment) => MarketDataProvider;
+  /** Faster loops for tests. */
+  timings?: { recoveryRetryMs?: number; orderSyncMs?: number; reconcileMs?: number; marketDataWaitMs?: number };
+}
+
+/**
+ * Everything needed to trade one environment (paper or live), wired
+ * together. Paper and live use the exact same classes; only the broker
+ * endpoint and credentials differ (spec §105).
+ */
+export class TradingContext {
+  readonly env: TradingEnvironment;
+  readonly configured: boolean;
+  phase: SystemPhase = 'BOOTING';
+  phaseDetail = '';
+  broker!: BrokerAdapter;
+  provider!: MarketDataProvider;
+  calendar!: MarketCalendar;
+  marketData!: MarketDataService;
+  account!: AccountService;
+  ledger!: PositionLedger;
+  orders!: OrderEngine;
+  riskSettings!: RiskSettings;
+  breakers!: CircuitBreakers;
+  controls!: Controls;
+  liveGate!: LiveGate;
+  reconciler!: Reconciler;
+  selector!: ContractSelector;
+  workers!: WorkerManager;
+  stats!: WorkerStatsService;
+  readonly timeline: Timeline;
+  readonly alerts: Alerts;
+  private signals!: SignalRepository;
+  private timers: NodeJS.Timeout[] = [];
+  private offs: (() => void)[] = [];
+  private stopped = false;
+  private ready = false;
+  private tradeStreamWasConnected = false;
+
+  constructor(private readonly o: TradingContextOptions) {
+    this.env = o.env;
+    const creds = o.config.credentials[o.env];
+    this.configured = creds !== null;
+    this.timeline = new Timeline(o.env, o.db, o.bus, o.clock, o.logger.child({ component: 'timeline' }));
+    this.alerts = new Alerts(o.bus, o.clock);
+    this.riskSettings = new RiskSettings(o.settings, o.config.riskDefaults);
+    this.breakers = new CircuitBreakers(o.env, o.settings, o.bus, o.audit, this.alerts, this.timeline, o.clock, o.logger.child({ component: 'breakers' }));
+    this.controls = new Controls(o.env, o.settings, o.bus, o.audit, this.timeline, this.alerts, o.clock, o.logger.child({ component: 'controls' }));
+    this.liveGate = new LiveGate(o.env, o.config.liveTradingEnabled, o.audit, this.timeline, o.bus, o.clock, o.logger.child({ component: 'live-gate' }));
+    if (!creds) return;
+
+    if (o.env === 'live') assertLiveEndpoints(o.config);
+    const log = o.logger.child({ env: o.env });
+    this.broker =
+      o.brokerFactory?.(o.env) ??
+      new AlpacaBrokerAdapter({
+        env: o.env,
+        baseUrl: tradingBaseUrl(o.config, o.env),
+        streamUrl: tradingStreamUrl(o.config, o.env),
+        credentials: creds,
+        logger: log,
+        clock: o.clock,
+      });
+    this.provider =
+      o.providerFactory?.(o.env) ??
+      new AlpacaMarketDataProvider({
+        dataUrl: o.config.endpoints.data,
+        dataStreamUrl: o.config.endpoints.dataStream,
+        stockFeed: o.config.stockFeed,
+        optionsFeed: o.config.optionsFeed,
+        credentials: creds,
+        logger: log,
+      });
+    this.calendar = new MarketCalendar(this.broker, o.db, o.clock, log.child({ component: 'calendar' }), o.config.thresholds.maxClockSkewMs);
+    this.marketData = new MarketDataService(this.provider, this.calendar, o.bus, o.clock, log.child({ component: 'market-data' }), {
+      env: o.env,
+      symbols: o.config.symbols,
+      maxDataAgeMs: o.config.thresholds.maxDataAgeMs,
+      maxOptionQuoteAgeMs: o.config.thresholds.maxOptionQuoteAgeMs,
+      paperAllowIndicativeOptions: o.config.paperAllowIndicativeOptions,
+    });
+    this.account = new AccountService(this.broker, o.db, o.bus, o.clock, log.child({ component: 'account' }), { env: o.env });
+    this.ledger = new PositionLedger(o.env, o.db, o.clock, log.child({ component: 'ledger' }));
+    this.selector = new ContractSelector(this.broker, this.provider, o.clock, log.child({ component: 'options' }));
+    this.stats = new WorkerStatsService(o.env, o.db, o.clock);
+    this.signals = new SignalRepository(o.env, o.db);
+
+    let engine: OrderEngine | null = null;
+    const risk = new LiveRiskContext({
+      env: o.env,
+      clock: o.clock,
+      broker: this.broker,
+      provider: this.provider,
+      account: this.account,
+      calendar: this.calendar,
+      marketData: this.marketData,
+      ledger: this.ledger,
+      selector: this.selector,
+      controls: this.controls,
+      liveGate: this.liveGate,
+      breakers: this.breakers,
+      reconciler: () => this.reconciler,
+      riskSettings: this.riskSettings,
+      stats: this.stats,
+      workers: () => this.workers ?? null,
+      signalHasOrder: (id, exclude) => engine!.repository.signalHasOrder(id, exclude),
+      allowedUnderlyings: o.config.symbols,
+    });
+    engine = new OrderEngine({
+      env: o.env,
+      broker: this.broker,
+      db: o.db,
+      ledger: this.ledger,
+      bus: o.bus,
+      audit: o.audit,
+      timeline: this.timeline,
+      alerts: this.alerts,
+      clock: o.clock,
+      logger: log.child({ component: 'orders' }),
+      risk,
+      breakers: {
+        brokerRejected: (r) => this.breakers.recordRejection(r),
+        apiError: (r) => this.breakers.recordApiError(r),
+      },
+      dailyPnl: () => this.account.dayPnl(),
+      onFills: () => this.account.requestRefresh(),
+    });
+    this.orders = engine;
+    this.reconciler = new Reconciler(o.env, this.account, this.ledger, this.orders, this.breakers, o.audit, this.timeline, this.alerts, o.bus, o.clock, log.child({ component: 'reconciler' }), () =>
+      this.workers ? this.workers.underlyings() : o.config.symbols,
+    );
+
+    this.workers = new WorkerManager(
+      {
+        env: o.env,
+        marketData: this.marketData,
+        calendar: this.calendar,
+        orders: this.orders,
+        ledger: this.ledger,
+        selector: this.selector,
+        controls: this.controls,
+        signals: this.signals,
+        stats: this.stats,
+        timeline: this.timeline,
+        bus: o.bus,
+        clock: o.clock,
+        logger: log.child({ component: 'workers' }),
+        db: o.db,
+        maxOptionQuoteAgeMs: o.config.thresholds.maxOptionQuoteAgeMs,
+        systemHalt: () => this.systemHalt(),
+        maxPositionNotional: () => this.riskSettings.get().maxPositionNotional,
+        maxContracts: () => this.riskSettings.get().maxContracts,
+        maxShares: () => this.riskSettings.get().maxShares,
+      },
+      new WorkerRepository(o.db),
+      o.audit,
+    );
+  }
+
+  private setPhase(phase: SystemPhase, detail = ''): void {
+    this.phase = phase;
+    this.phaseDetail = detail;
+    this.o.logger.info({ env: this.env, phase, detail }, 'system phase');
+    this.o.bus.emit('SYSTEM_UPDATED', {});
+  }
+
+  /** Recovery sequence (spec §36, §94). Never assumes previous memory is correct. */
+  async start(): Promise<void> {
+    await this.riskSettings.load();
+    await this.controls.load();
+    await this.breakers.load();
+    await this.timeline.load(DateTime.fromMillis(this.o.clock.now(), { zone: 'America/New_York' }).startOf('day').toMillis());
+    if (!this.configured) {
+      this.setPhase('NOT_CONFIGURED', `No Alpaca credentials configured for ${this.env.toUpperCase()}. Set them in .env and restart.`);
+      return;
+    }
+    await this.workers.load();
+    void this.recoverLoop();
+  }
+
+  private async recoverLoop(): Promise<void> {
+    const retry = this.o.timings?.recoveryRetryMs ?? 20_000;
+    while (!this.stopped) {
+      try {
+        await this.recover();
+        return;
+      } catch (err) {
+        this.setPhase('DEGRADED', `recovery failed: ${(err as Error).message} — retrying in ${Math.round(retry / 1000)}s`);
+        this.o.logger.error({ err: (err as Error).message }, 'recovery failed');
+        await sleep(retry);
+      }
+    }
+  }
+
+  private async recover(): Promise<void> {
+    this.setPhase('RECOVERING', 'reloading local state');
+    await this.ledger.load();
+    await this.orders.load();
+
+    this.setPhase('ACCOUNT_SYNC', 'retrieving account from broker');
+    await this.account.refreshAccount();
+    if (this.account.environmentWarning && this.env === 'live') throw new Error(this.account.environmentWarning);
+
+    this.setPhase('POSITION_SYNC', 'retrieving positions from broker');
+    await this.account.refreshPositions();
+
+    this.setPhase('ORDER_SYNC', 'reconnecting order stream and syncing open orders');
+    if (this.offs.length === 0) this.wireEvents();
+    await this.orders.syncNonTerminal();
+    await this.account.refreshOpenOrders();
+
+    this.setPhase('MARKET_DATA_SYNC', 'loading calendar, history and live data');
+    await this.calendar.start();
+    await this.marketData.start();
+    const waitMs = this.o.timings?.marketDataWaitMs ?? 15_000;
+    for (let waited = 0; waited < waitMs; waited += 250) {
+      if (this.provider.status().stock.state === 'CONNECTED') break;
+      await sleep(250);
+    }
+
+    this.setPhase('RISK_CHECK', 'reconciling broker and local state');
+    await this.reconciler.run({ immediate: true });
+    await this.workers.start();
+
+    this.account.start();
+    this.reconciler.start(this.o.timings?.reconcileMs ?? 15_000);
+    this.timers.push(setInterval(() => void this.orders.syncNonTerminal().catch(() => undefined), this.o.timings?.orderSyncMs ?? 30_000));
+    this.timers.push(
+      setInterval(() => {
+        const c = this.calendar.clockStatus();
+        if (c.checkedAt !== null) this.breakers.recordClock(c.ok, c.brokerSkewMs);
+      }, 30_000),
+    );
+    this.ready = true;
+    const stockState = this.provider.status().stock.state;
+    if (stockState === 'CONNECTED') this.setPhase('READY', 'recovered — workers monitoring, autotrading OFF until enabled');
+    else this.setPhase('DEGRADED', `market data ${stockState.toLowerCase()} — trading blocked until live data resumes`);
+    void this.o.audit.record({
+      action: 'RECOVERY_COMPLETE',
+      actor: 'system',
+      env: this.env,
+      details: {
+        account: maskAccountNumber(this.account.account?.accountNumber),
+        positions: this.account.positions.length,
+        openOrders: this.account.openOrders.length,
+        reconciliation: this.reconciler.status().status,
+      },
+    });
+    this.timeline.add({ kind: 'system', title: `Recovered · ${this.env.toUpperCase()}`, detail: `${this.account.positions.length} position(s), ${this.account.openOrders.length} open order(s), reconciliation ${this.reconciler.status().status}` });
+  }
+
+  private wireEvents(): void {
+    const bus = this.o.bus;
+    this.offs.push(this.broker.subscribeTradeUpdates((u) => void this.orders.onTradeUpdate(u).catch((err) => this.o.logger.error({ err }, 'trade update failed'))));
+    this.offs.push(
+      this.broker.onTradeStreamStatus((s: StreamStatus) => {
+        bus.emit('BROKER_STATUS', {});
+        if (s.state === 'CONNECTED') {
+          if (this.tradeStreamWasConnected && this.ready) {
+            // After a broker reconnect: reconcile orders, account and positions before trusting state (spec §66).
+            this.timeline.add({ kind: 'system', title: 'Broker stream reconnected', detail: 'syncing orders, account and positions' });
+            void (async () => {
+              await this.orders.syncNonTerminal();
+              await this.account.refreshAll().catch(() => undefined);
+              await this.reconciler.run();
+            })();
+          }
+          this.tradeStreamWasConnected = true;
+        } else if (this.tradeStreamWasConnected && (s.state === 'RECONNECTING' || s.state === 'DISCONNECTED')) {
+          this.alerts.raise('BROKER_DISCONNECTED', 'error', 'BROKER CONNECTION LOST', 'New orders disabled. Reconnecting…');
+        }
+      }),
+    );
+    this.offs.push(
+      bus.on('MARKET_DATA_STATUS', ({ stream, status }) => {
+        if (stream !== 'stock') return;
+        if (status.state === 'CONNECTED' && this.ready && this.phase === 'DEGRADED') this.setPhase('READY', 'market data restored');
+        if (status.state !== 'CONNECTED' && this.ready && this.phase === 'READY') {
+          this.setPhase('DEGRADED', `market data ${status.state.toLowerCase()}`);
+          this.alerts.raise('MARKET_DATA_DISCONNECTED', 'error', 'MARKET DATA OFFLINE', 'New autonomous entries stopped. Existing positions preserved. Reconnecting…');
+        }
+      }),
+    );
+    this.offs.push(
+      bus.on('ACCOUNT_UPDATED', () => {
+        const dp = this.account.dayPnl();
+        const limit = this.riskSettings.get().maxDailyLoss;
+        if (dp !== null && dp <= -limit && !this.breakers.isTripped('DAILY_LOSS')) {
+          void this.breakers.trip('DAILY_LOSS', `Day P&L ${dp.toFixed(2)} reached the −${limit.toFixed(2)} limit. All new entries disabled.`);
+        }
+        if (this.account.accountChanged && !this.breakers.isTripped('ACCOUNT_CHANGED')) void this.breakers.trip('ACCOUNT_CHANGED', this.account.accountChanged);
+      }),
+    );
+  }
+
+  /** Why workers may not trade right now (null = no system-level halt). */
+  systemHalt(): string | null {
+    if (this.phase !== 'READY' && this.phase !== 'DEGRADED') return `SYSTEM ${this.phase.replace('_', ' ')}`;
+    const tripped = this.breakers.tripped();
+    if (tripped.length) return `HALTED · ${tripped[0]!.label.toUpperCase()}`;
+    if (this.reconciler.status().status === 'MISMATCH') return 'RECONCILIATION MISMATCH';
+    return null;
+  }
+
+  /** Every reason new entries are blocked right now — never hidden (spec §95). */
+  haltReasons(): HaltReason[] {
+    const out: HaltReason[] = [];
+    if (!this.configured) return [{ code: 'NOT_CONFIGURED', message: 'Broker credentials not configured' }];
+    if (this.env === 'live' && !this.liveGate.serverLockOpen) out.push({ code: 'LIVE_LOCKED', message: 'LIVE_TRADING_ENABLED=false on server' });
+    if (this.env === 'live' && this.liveGate.serverLockOpen && !this.liveGate.armed) out.push({ code: 'LIVE_NOT_ARMED', message: 'Live execution not armed' });
+    if (this.controls.killSwitch.active) out.push({ code: 'KILL_SWITCH', message: 'Kill switch active' });
+    if (!this.controls.autotrading) out.push({ code: 'AUTOTRADING_OFF', message: 'Autotrading off' });
+    if (this.controls.entriesPaused) out.push({ code: 'ENTRIES_PAUSED', message: 'Entries paused' });
+    if (this.phase !== 'READY') out.push({ code: 'PHASE', message: this.phaseDetail || this.phase });
+    for (const b of this.breakers.tripped()) out.push({ code: `BREAKER_${b.id}`, message: b.label });
+    if (this.reconciler && this.reconciler.status().status === 'MISMATCH') out.push({ code: 'RECONCILIATION', message: 'Account reconciliation mismatch' });
+    if (this.account) {
+      const b = this.account.status(this.broker.tradeStreamStatus().state === 'CONNECTED');
+      if (b.status !== 'CONNECTED') out.push({ code: 'BROKER', message: `Broker ${b.status.replace('_', ' ')}${b.detail ? ` — ${b.detail}` : ''}` });
+    }
+    if (this.calendar) {
+      const m = this.calendar.status();
+      if (!m.isOpen) out.push({ code: 'MARKET_CLOSED', message: `Market ${m.label.replace('_', ' ').toLowerCase()}` });
+      else {
+        const stale = this.o.config.symbols.filter((s) => this.marketData.freshness(s).stale);
+        if (stale.length) out.push({ code: 'DATA_STALE', message: `Market data stale: ${stale.join(', ')}` });
+      }
+      const c = this.calendar.clockStatus();
+      if (!c.ok) out.push({ code: 'CLOCK', message: c.brokerSkewMs === null ? 'Server clock not verified' : `Clock skew ${c.brokerSkewMs}ms` });
+    }
+    if (this.account?.dayPnl() !== null && this.account && this.account.dayPnl()! <= -this.riskSettings.get().maxDailyLoss) {
+      out.push({ code: 'DAILY_LOSS', message: 'Daily loss limit reached' });
+    }
+    return out;
+  }
+
+  async stop(): Promise<void> {
+    this.stopped = true;
+    for (const t of this.timers) clearInterval(t);
+    this.timers = [];
+    for (const off of this.offs) off();
+    this.offs = [];
+    if (!this.configured) return;
+    this.workers.stop();
+    this.reconciler.stop();
+    this.account.stop();
+    this.calendar.stop();
+    await Promise.allSettled([this.marketData.stop(), this.broker.close()]);
+    await this.o.audit.flush();
+  }
+}

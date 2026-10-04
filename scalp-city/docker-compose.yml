@@ -1,0 +1,20 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: scalp
+      POSTGRES_PASSWORD: scalp
+      POSTGRES_DB: scalp_city
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - scalp-city-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U scalp -d scalp_city"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  scalp-city-pg:

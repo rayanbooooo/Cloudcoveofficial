@@ -1,0 +1,16 @@
+node_modules/
+dist/
+coverage/
+*.log
+.DS_Store
+
+# Secrets — never commit real credentials
+.env
+.env.*
+!.env.example
+
+# Local Postgres data dirs / test artifacts
+.pgdata/
+test-results/
+playwright-report/
+.screenshots/

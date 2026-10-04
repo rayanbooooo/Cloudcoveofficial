@@ -1,0 +1,64 @@
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { AuditLog } from '../src/audit/AuditLog.js';
+import { ManualClock } from '../src/core/clock.js';
+import { createTestLogger } from '../src/core/logger.js';
+import type { Db } from '../src/db/db.js';
+import { migrate, splitSql } from '../src/db/migrations.js';
+import { WorkerRepository } from '../src/workers/WorkerRepository.js';
+import { createPgliteDb } from './support/pglite.js';
+
+let db: Db;
+
+beforeAll(async () => {
+  db = await createPgliteDb();
+  await migrate(db);
+});
+afterAll(async () => {
+  await db.close();
+});
+
+describe('migrations', () => {
+  it('applies cleanly and is idempotent', async () => {
+    expect(await migrate(db)).toBe(0);
+    const { rows } = await db.query<{ version: number }>('SELECT version FROM schema_migrations');
+    expect(rows.map((r) => Number(r.version))).toEqual([1]);
+  });
+
+  it('splits SQL without breaking dollar-quoted bodies', () => {
+    const parts = splitSql(`CREATE TABLE a(x int); -- c;omment\nCREATE FUNCTION f() RETURNS trigger AS $$ BEGIN RAISE EXCEPTION 'x;y'; END; $$ LANGUAGE plpgsql;`);
+    expect(parts).toHaveLength(2);
+    expect(parts[1]).toContain("RAISE EXCEPTION 'x;y'; END;");
+  });
+
+  it('refuses a second ENTRY order for the same signal', async () => {
+    await new WorkerRepository(db).seed();
+    const insert = (id: string, coid: string) =>
+      db.query(
+        `INSERT INTO orders(id, env, client_order_id, worker_id, source, purpose, signal_id, symbol, asset_class, side, type, time_in_force, qty, state, created_at, updated_at)
+         VALUES ($1,'paper',$2,'qqq-og','WORKER','ENTRY','sig-1','QQQ','us_equity','buy','market','day',1,'CREATED',now(),now())`,
+        [id, coid],
+      );
+    await insert('o1', 'c1');
+    await expect(insert('o2', 'c2')).rejects.toThrow();
+  });
+});
+
+describe('audit log', () => {
+  it('chains hashes and verifies', async () => {
+    const audit = new AuditLog(db, createTestLogger(), new ManualClock(Date.UTC(2026, 9, 5, 14, 0)));
+    await audit.record({ action: 'SYSTEM_START', actor: 'system', env: 'paper' });
+    await audit.record({ action: 'ORDER_REQUESTED', actor: 'worker:qqq-og', env: 'paper', symbol: 'QQQ', details: { qty: 2, nested: { b: 1, a: 2 } } });
+    await audit.record({ action: 'KILL_SWITCH', actor: 'rayan', env: 'paper', details: { password: 'hunter2' } });
+    const v = await audit.verify();
+    expect(v).toEqual({ ok: true, checked: 3, brokenAtId: null });
+    const rows = await audit.list({ limit: 10 });
+    expect(rows[0]!.details).toEqual({ password: '[REDACTED]' });
+    expect(rows[1]!.prevHash).toBe(rows[2]!.hash);
+  });
+
+  it('is append-only at the database level', async () => {
+    await expect(db.query(`UPDATE audit_logs SET actor = 'mallory'`)).rejects.toThrow(/append-only/);
+    await expect(db.query(`DELETE FROM audit_logs`)).rejects.toThrow(/append-only/);
+    await expect(db.query(`TRUNCATE audit_logs`)).rejects.toThrow(/append-only/);
+  });
+});
