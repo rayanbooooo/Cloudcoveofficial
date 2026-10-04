@@ -10,6 +10,8 @@ export type AuditAction =
   | 'LOGIN'
   | 'LOGIN_FAILED'
   | 'LOGOUT'
+  | 'OWNER_CREATED'
+  | 'SETUP_FAILED'
   | 'LIVE_MODE_ENABLED'
   | 'LIVE_MODE_DISARMED'
   | 'LIVE_MODE_ENABLE_REJECTED'

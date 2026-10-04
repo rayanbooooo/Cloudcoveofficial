@@ -46,8 +46,15 @@ async function main(): Promise<void> {
     '',
   ].filter((l): l is string => l !== null);
   for (const l of lines) logger.info(l);
-  if ((await app.auth.userCount()) === 0) {
-    logger.warn('No users exist yet. Create one with:  npm run user:create -- --username <name>');
+  if (app.setupCode) {
+    for (const l of [
+      '',
+      '  ⚑ FIRST RUN: no account exists yet.',
+      `    Open http://${config.host}:${config.port} and create your account with setup code:  ${app.setupCode}`,
+      '    (single use; it stops working once the account exists. Alternative: npm run user:create)',
+      '',
+    ])
+      logger.warn(l);
   }
 
   let closing = false;

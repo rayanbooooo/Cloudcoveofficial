@@ -72,6 +72,13 @@ describe('PAPER end-to-end: market data → signal → risk → order → fill �
     expect(s.system.endpoints.nonStandard).toBe(true); // the fake is flagged, never presented as Alpaca
     expect(s.account.equity).toBe(100_000);
     expect(s.workers).toHaveLength(5);
+    // An account exists, so first-run setup is closed: there is no public sign-up.
+    const setup = await fetch(`${e.base}/api/auth/setup`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ setupCode: 'AAAAA-AAAAA', username: 'intruder', password: 'correct-horse-battery' }),
+    });
+    expect(setup.status).toBe(409);
     // Autotrading is OFF after every start.
     expect(s.system.controls.autotrading).toBe(false);
     expect(s.workers.every((w) => !w.autotradeEnabled)).toBe(true);

@@ -23,6 +23,7 @@ npm install
 npm run demo          # builds the UI, starts http://127.0.0.1:8787
 # sign in: demo / scalp-city-demo
 DEMO_AUTOTRADE=1 npm run demo   # same, with autotrading switched on so you can watch workers trade
+DEMO_SETUP=1 npm run demo       # no preset account: create your own in the browser (first-run flow)
 ```
 
 `npm run demo` starts the **dev harness** (`packages/server/test/harness/devServer.ts`). It runs the real
@@ -45,10 +46,16 @@ Requirements: Node 22+, PostgreSQL 16 (Docker is easiest), Alpaca **paper** API 
 cp .env.example .env     # fill ALPACA_API_KEY / ALPACA_API_SECRET (paper), SESSION_SECRET, DATABASE_URL
 npm run db:up            # postgres:16 in Docker (scalp/scalp/scalp_city on localhost:5432)
 npm run migrate
-npm run user:create -- --username you      # prompts for a password (or SCALP_PASSWORD=…)
+npm run user:create -- --username you      # optional: or create the account in the browser (below)
 npm run dev              # server :8787 + UI :5173 (Vite proxies /api and /ws)
 # production-style: npm run build && npm start   → UI served by the server on :8787
 ```
+
+**Your account.** Scalp City has a single owner and no public sign-up. On first start with no
+account, the server prints a one-time **setup code** in its log. Open the app and it shows
+*Create your account*: enter the code, a username and a password (12+ characters). The code works
+once. After that, sign-up is closed for good, so someone who merely finds your URL can't claim the
+server. (`npm run user:create` does the same from a terminal.)
 
 Set `ALPACA_STOCK_FEED` / `ALPACA_OPTIONS_FEED` to what your data plan actually includes. The UI labels
 the feeds from these values (`LIVE · IEX ONLY`, `LIVE · SIP`, `DELAYED 15 MIN`).

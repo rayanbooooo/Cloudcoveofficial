@@ -16,6 +16,9 @@
  * Hosting the demo behind a public URL (e.g. a Vercel Sandbox): set HOST=0.0.0.0,
  * PUBLIC_URL / ALLOWED_ORIGINS to that URL, COOKIE_SECURE=true and a strong
  * DEMO_PASSWORD. It is still the fake broker: never give it real credentials.
+ *
+ *   DEMO_SETUP=1 npm run demo        # no preset account: create yours in the browser with
+ *                                    # the one-time setup code printed below (first-run flow)
  */
 import { DateTime } from 'luxon';
 import { buildServer } from '../../src/api/server.js';
@@ -34,6 +37,7 @@ const HOST = process.env.HOST ?? '127.0.0.1';
 const PUBLIC_URL = process.env.PUBLIC_URL ?? `http://127.0.0.1:${PORT}`;
 const USER = process.env.DEMO_USER ?? 'demo';
 const PASSWORD = process.env.DEMO_PASSWORD ?? 'scalp-city-demo';
+const SETUP = ['1', 'true', 'yes'].includes((process.env.DEMO_SETUP ?? '').toLowerCase());
 const AUTOTRADE = ['1', 'true', 'yes'].includes((process.env.DEMO_AUTOTRADE ?? '').toLowerCase());
 const START = process.env.DEMO_START ?? '11:00:30';
 
@@ -115,7 +119,10 @@ async function main(): Promise<void> {
   const db = await createPgliteDb();
   const app = new App({ config, db, clock, logger });
   await app.init();
-  await app.auth.createUser(USER, PASSWORD);
+  if (!SETUP) {
+    await app.auth.createUser(USER, PASSWORD); // closes first-run setup
+    app.setupCode = null;
+  }
 
   const webDist = fileURLToPath(new URL('../../../web/dist', import.meta.url));
   const { fastify } = await buildServer(app, { webDist });
@@ -161,7 +168,7 @@ async function main(): Promise<void> {
     '  ███ SCALP CITY · DEV HARNESS (synthetic market, fake broker, in-memory DB)',
     '  This is NOT paper trading on Alpaca and NOT live trading. No real broker is contacted.',
     `  open        ${PUBLIC_URL}`,
-    `  sign in     ${USER} / ${PASSWORD}`,
+    SETUP ? `  first run   create your account in the browser with setup code ${app.setupCode}` : `  sign in     ${USER} / ${PASSWORD}`,
     `  session     ${SESSION_DATE} from ${START} New York (virtual clock, real-time speed)`,
     `  autotrade   ${AUTOTRADE ? 'ON (fake account)' : 'off — set DEMO_AUTOTRADE=1 to watch workers trade'}`,
     '',

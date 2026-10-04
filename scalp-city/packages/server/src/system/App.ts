@@ -40,6 +40,8 @@ export class App {
   readonly auth: AuthService;
   readonly views: ViewBuilder;
   ctx!: TradingContext;
+  /** First-run setup code to print on the console (null when an account exists). */
+  setupCode: string | null = null;
   private switching = false;
   private timers: NodeJS.Timeout[] = [];
 
@@ -59,6 +61,7 @@ export class App {
     const applied = await migrate(this.db, (m) => this.logger.info(m));
     if (applied) this.logger.info({ applied }, 'database migrated');
     await new WorkerRepository(this.db).seed();
+    this.setupCode = await this.auth.prepareSetup();
     void this.audit.record({
       action: 'SYSTEM_START',
       actor: 'system',

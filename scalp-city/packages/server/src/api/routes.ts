@@ -117,6 +117,34 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
     return { authenticated: true, username: result.session.username, csrfToken: result.session.csrfToken };
   });
 
+  // First run only: create the owner account with the setup code printed on the server console.
+  fastify.post('/api/auth/setup', { config: { rateLimit: { max: 10, timeWindow: '15 minutes' } } }, async (req, reply) => {
+    const body = parse(z.object({ setupCode: z.string().min(1).max(64), username: z.string().min(3).max(32), password: z.string().min(12).max(256) }), req.body);
+    let outcome: 'ok' | 'closed' | 'bad_code';
+    try {
+      outcome = await app.auth.setupOwner(body.setupCode, body.username, body.password);
+    } catch (err) {
+      throw new HttpError(400, 'INVALID_ACCOUNT', (err as Error).message);
+    }
+    if (outcome === 'closed') throw new HttpError(409, 'SETUP_CLOSED', 'an account already exists — sign in instead');
+    if (outcome === 'bad_code') {
+      void app.audit.record({ action: 'SETUP_FAILED', actor: 'anonymous', details: { ip: req.ip } });
+      throw new HttpError(403, 'BAD_SETUP_CODE', 'wrong setup code — use the code printed in the server log when Scalp City started');
+    }
+    app.setupCode = null;
+    const result = await app.auth.login(body.username, body.password, { ip: req.ip, userAgent: req.headers['user-agent'] ?? null });
+    if (!result) throw new HttpError(500, 'SETUP_LOGIN_FAILED', 'account created, but signing in failed — sign in manually');
+    void app.audit.record({ action: 'OWNER_CREATED', actor: result.session.username, details: { ip: req.ip } });
+    reply.setCookie(SESSION_COOKIE, result.token, {
+      httpOnly: true,
+      secure: app.config.cookieSecure,
+      sameSite: 'strict',
+      path: '/',
+      expires: new Date(result.session.expiresAt),
+    });
+    return { authenticated: true, username: result.session.username, csrfToken: result.session.csrfToken };
+  });
+
   fastify.post('/api/auth/logout', async (req, reply) => {
     const s = requireAuth(req);
     await app.auth.logout(req.cookies[SESSION_COOKIE]);

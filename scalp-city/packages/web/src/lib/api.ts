@@ -58,6 +58,8 @@ async function call<T>(method: string, path: string, body?: unknown): Promise<T>
 export const Api = {
   session: () => call<SessionResponse>('GET', '/api/session'),
   login: (username: string, password: string) => call<SessionResponse>('POST', '/api/auth/login', { username, password }),
+  /** First run only: create the owner account with the setup code from the server log. */
+  setup: (setupCode: string, username: string, password: string) => call<SessionResponse>('POST', '/api/auth/setup', { setupCode, username, password }),
   logout: () => call<{ ok: true }>('POST', '/api/auth/logout', {}),
   snapshot: () => call<Snapshot>('GET', '/api/snapshot'),
   readiness: () => call<ReadinessView>('GET', '/api/readiness'),

@@ -54,11 +54,58 @@ const DUMMY_HASH = 'scrypt$16384$8$1$AAAAAAAAAAAAAAAAAAAAAA$' + Buffer.alloc(64)
  * does not yield usable sessions.
  */
 export class AuthService {
+  /** First-run setup code (in memory only); null once an account exists. */
+  private setupCode: string | null = null;
+  private setupQueue: Promise<unknown> = Promise.resolve();
+
   constructor(
     private readonly db: Db,
     private readonly secret: string,
     private readonly clock: Clock,
   ) {}
+
+  /**
+   * First run: when no account exists, mint a one-time setup code that the
+   * server prints to its own console. Creating the owner account from the
+   * browser requires it, so whoever merely finds the URL cannot claim the
+   * server. There is no public sign-up: once one account exists, setup is
+   * closed for good (further accounts only via `npm run user:create`).
+   */
+  async prepareSetup(): Promise<string | null> {
+    if ((await this.userCount()) > 0) {
+      this.setupCode = null;
+      return null;
+    }
+    // 10 symbols from a 32-letter unambiguous alphabet (50 bits); 256 % 32 = 0, so no modulo bias.
+    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    const raw = [...randomBytes(10)].map((b) => alphabet[b % 32]).join('');
+    this.setupCode = `${raw.slice(0, 5)}-${raw.slice(5)}`;
+    return this.setupCode;
+  }
+
+  get setupOpen(): boolean {
+    return this.setupCode !== null;
+  }
+
+  /**
+   * Create the owner account with the setup code. Serialized, so two
+   * simultaneous requests can never both succeed; the code is single-use.
+   */
+  setupOwner(code: string, username: string, password: string): Promise<'ok' | 'closed' | 'bad_code'> {
+    const run = this.setupQueue.then(async () => {
+      if (this.setupCode === null || (await this.userCount()) > 0) {
+        this.setupCode = null;
+        return 'closed' as const;
+      }
+      const norm = (c: string) => c.toUpperCase().replace(/[^A-Z0-9]/g, '');
+      if (!safeEqual(norm(code), norm(this.setupCode))) return 'bad_code' as const;
+      await this.createUser(username, password);
+      this.setupCode = null;
+      return 'ok' as const;
+    });
+    this.setupQueue = run.catch(() => undefined);
+    return run;
+  }
 
   private sessionKey(token: string): string {
     return createHmac('sha256', this.secret).update(token).digest('hex');
@@ -74,6 +121,7 @@ export class AuthService {
     if (!/^[a-z0-9_.-]{3,32}$/.test(u)) throw new Error('username must be 3–32 characters: a-z 0-9 _ . -');
     const id = randomUUID();
     await this.db.query('INSERT INTO users(id, username, password_hash) VALUES ($1,$2,$3)', [id, u, await hashPassword(password)]);
+    this.setupCode = null; // an account exists: first-run setup is closed
     return id;
   }
 

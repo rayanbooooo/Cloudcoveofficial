@@ -11,6 +11,81 @@ import { AuditDrawerBody, HealthDrawerBody, JournalDrawerBody, LiveDrawerBody } 
 import { SettingsDrawerBody, TradeDrawerBody } from './drawers/Trade';
 import { Btn, cx, Drawer, ErrorText, Field, inputCls } from './ui';
 
+function AuthFrame({ subtitle, children }: { subtitle: string; children: ReactNode }) {
+  return (
+    <div className="flex h-full items-center justify-center bg-ink-950 p-4">
+      <div className="pointer-events-none absolute inset-0 opacity-[0.07]" style={{ backgroundImage: 'linear-gradient(rgba(140,160,190,.6) 1px, transparent 1px), linear-gradient(90deg, rgba(140,160,190,.6) 1px, transparent 1px)', backgroundSize: '48px 48px' }} />
+      <div className="panel relative w-full max-w-[380px] p-6">
+        <div className="display text-[20px] tracking-[0.24em]">SCALP CITY</div>
+        <div className="label mt-1">{subtitle}</div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * First run: no account exists yet. The owner creates it here with the
+ * one-time setup code the server printed in its own log, which proves
+ * control of the server. Once an account exists this screen never returns.
+ */
+function SetupForm() {
+  const setSession = useStore((s) => s.setSession);
+  const [code, setCode] = useState('');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirm, setConfirm] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const mismatch = confirm.length > 0 && confirm !== password;
+  const valid = code.trim().length >= 10 && /^[a-zA-Z0-9_.-]{3,32}$/.test(username.trim()) && password.length >= 12 && password === confirm;
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await Api.setup(code, username, password);
+      setCsrf(r.csrfToken);
+      setSession({ authenticated: true, username: r.username, hasUsers: true });
+      realtime.start();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) setSession({ authenticated: false, username: null, hasUsers: true });
+      setError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <AuthFrame subtitle="First run · create your account">
+      <p className="mt-4 text-[12px] leading-relaxed text-fg-2">
+        Scalp City has a single owner and no public sign-up. To prove you control this server, enter the <span className="text-fg">setup code</span> printed in its log when it started.
+      </p>
+      <form onSubmit={submit} className="mt-4 flex flex-col gap-3">
+        <Field label="Setup code (from the server log)">
+          <input className={cx(inputCls, 'uppercase tracking-[0.2em]')} value={code} onChange={(e) => setCode(e.target.value)} placeholder="XXXXX-XXXXX" autoComplete="one-time-code" autoFocus spellCheck={false} />
+        </Field>
+        <Field label="Username">
+          <input className={inputCls} autoComplete="username" value={username} onChange={(e) => setUsername(e.target.value)} placeholder="3–32 letters, digits, . _ -" />
+        </Field>
+        <Field label="Password (12+ characters)">
+          <input className={inputCls} type="password" autoComplete="new-password" value={password} onChange={(e) => setPassword(e.target.value)} />
+        </Field>
+        <Field label="Confirm password">
+          <input className={inputCls} type="password" autoComplete="new-password" value={confirm} onChange={(e) => setConfirm(e.target.value)} />
+        </Field>
+        {mismatch && <div className="text-[11.5px] text-pending">Passwords don&rsquo;t match.</div>}
+        <ErrorText>{error}</ErrorText>
+        <Btn variant="solid" type="submit" className="mt-1 !h-8" disabled={busy || !valid}>
+          Create account
+        </Btn>
+      </form>
+      <div className="mt-4 border-t border-line pt-3 text-[11px] text-fg-3">
+        No access to the log? An account can also be created on the server: <span className="num text-fg-2">npm run user:create -- --username you</span>
+      </div>
+    </AuthFrame>
+  );
+}
+
 export function Login() {
   const session = useStore((s) => s.session);
   const setSession = useStore((s) => s.setSession);
@@ -18,6 +93,7 @@ export function Login() {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  if (session && !session.hasUsers) return <SetupForm />;
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     setBusy(true);
@@ -34,31 +110,21 @@ export function Login() {
     }
   };
   return (
-    <div className="flex h-full items-center justify-center bg-ink-950 p-4">
-      <div className="pointer-events-none absolute inset-0 opacity-[0.07]" style={{ backgroundImage: 'linear-gradient(rgba(140,160,190,.6) 1px, transparent 1px), linear-gradient(90deg, rgba(140,160,190,.6) 1px, transparent 1px)', backgroundSize: '48px 48px' }} />
-      <form onSubmit={submit} className="panel relative w-full max-w-[360px] p-6">
-        <div className="display text-[20px] tracking-[0.24em]">SCALP CITY</div>
-        <div className="label mt-1">Trading command center · sign in</div>
-        <div className="mt-6 flex flex-col gap-3">
-          <Field label="Username">
-            <input className={inputCls} autoComplete="username" value={username} onChange={(e) => setUsername(e.target.value)} autoFocus />
-          </Field>
-          <Field label="Password">
-            <input className={inputCls} type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} />
-          </Field>
-          <ErrorText>{error}</ErrorText>
-          <Btn variant="solid" type="submit" className="mt-1 !h-8" disabled={busy || !username || !password}>
-            Sign in
-          </Btn>
-        </div>
-        {session && !session.hasUsers && (
-          <div className="mt-5 border-t border-line pt-4 text-[12px] text-fg-2">
-            No user exists yet. Create one on the server:
-            <pre className="num mt-2 overflow-x-auto bg-ink-850 p-2 text-[11px] text-fg">npm run user:create -- --username you</pre>
-          </div>
-        )}
+    <AuthFrame subtitle="Trading command center · sign in">
+      <form onSubmit={submit} className="mt-6 flex flex-col gap-3">
+        <Field label="Username">
+          <input className={inputCls} autoComplete="username" value={username} onChange={(e) => setUsername(e.target.value)} autoFocus />
+        </Field>
+        <Field label="Password">
+          <input className={inputCls} type="password" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} />
+        </Field>
+        <ErrorText>{error}</ErrorText>
+        <Btn variant="solid" type="submit" className="mt-1 !h-8" disabled={busy || !username || !password}>
+          Sign in
+        </Btn>
       </form>
-    </div>
+      <div className="mt-4 border-t border-line pt-3 text-[11px] text-fg-3">There is no public sign-up: this server already has its owner account. Sign in with it.</div>
+    </AuthFrame>
   );
 }
 
