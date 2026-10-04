@@ -49,10 +49,13 @@ async function minute(price: number, volume: number): Promise<void> {
   const now = e.clock.now();
   const nextMinute = Math.floor(now / 60_000) * 60_000 + 60_000;
   await e.advance(nextMinute + 1000 - now);
-  e.fake.closeBar('QQQ');
+  const bar = e.fake.closeBar('QQQ');
   e.fake.closeBar('SPY');
   e.fake.closeBar('IWM');
-  await new Promise((r) => setTimeout(r, 400));
+  // Synchronise on the server, not on a sleep: under CPU load a fixed delay
+  // let assertions race the bar evaluation. Wait until qqq-og has evaluated
+  // exactly this bar.
+  if (bar) await e.waitFor(async () => ((await worker('qqq-og')).signal.barTime ?? 0) >= bar.t, `qqq-og evaluated the ${new Date(bar.t).toISOString()} bar`);
 }
 
 describe('PAPER end-to-end: market data → signal → risk → order → fill → position → exit → P&L', () => {
@@ -115,8 +118,12 @@ describe('PAPER end-to-end: market data → signal → risk → order → fill �
     expect(filled.position!.qty).toBeGreaterThan(0);
     w = filled;
 
-    // Lifecycle strictly from broker evidence.
-    const s = await snapshot();
+    // Lifecycle strictly from broker evidence. The broker's position list
+    // refreshes shortly after the fill event, so wait for it rather than race it.
+    const s = await e.waitFor(async () => {
+      const snap = await snapshot();
+      return snap.positions.length > 0 ? snap : null;
+    }, 'broker position listed');
     const entry = s.orders.find((o) => o.workerId === 'qqq-og' && o.purpose === 'ENTRY')!;
     expect(entry.state).toBe('FILLED');
     expect(entry.risk!.approved).toBe(true);

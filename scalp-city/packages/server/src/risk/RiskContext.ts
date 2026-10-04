@@ -148,7 +148,8 @@ export class LiveRiskContext implements RiskContextProvider {
         ? {
             config: worker.config,
             autotradeEnabled: worker.autotradeEnabled,
-            dayPnl: (workerStats?.realizedToday ?? 0) + (workerUnrealized ?? 0),
+            // Unknown mark → unknown P&L; the worker loss check then fails closed.
+            dayPnl: workerUnrealized === null ? null : (workerStats?.realizedToday ?? 0) + workerUnrealized,
             realizedToday: workerStats?.realizedToday ?? 0,
           }
         : null,

@@ -2,7 +2,7 @@
   "name": "scalp-city",
   "private": true,
   "version": "0.1.0",
-  "description": "Scalp City — real-time trading command center with a 3D city interface, Alpaca brokerage connectivity, and server-side risk controls.",
+  "description": "Scalp City \u2014 real-time trading command center with a 3D city interface, Alpaca brokerage connectivity, and server-side risk controls.",
   "type": "module",
   "workspaces": [
     "packages/shared",
@@ -21,7 +21,8 @@
     "migrate": "npm run migrate -w @scalp-city/server",
     "user:create": "npm run user:create -w @scalp-city/server --",
     "db:up": "docker compose up -d postgres",
-    "db:down": "docker compose down"
+    "db:down": "docker compose down",
+    "demo": "npm run build -w @scalp-city/web && npm run demo -w @scalp-city/server"
   },
   "devDependencies": {
     "concurrently": "^10.0.5",

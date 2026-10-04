@@ -118,7 +118,8 @@ export class WorkerStatsService {
     return {
       realizedToday: s.realizedToday,
       unrealized,
-      pnlToday: s.realizedToday + (unrealized ?? 0),
+      // Unknown unrealized P&L makes the day total unknown: a loss is never hidden behind a 0.
+      pnlToday: unrealized === null ? null : s.realizedToday + unrealized,
       tradesToday: s.tradesToday,
       winsToday: s.winsToday,
       lossesToday: s.lossesToday,

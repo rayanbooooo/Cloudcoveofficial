@@ -522,9 +522,10 @@ export class Worker {
     return null;
   }
 
+  /** 0 when flat; null when a position is open but has no usable mark (unknown, never assumed 0). */
   unrealized(): number | null {
     const pos = this.position();
-    if (!pos) return null;
+    if (!pos) return 0;
     const { price } = this.markPrice(pos);
     if (price === null) return null;
     return (price - pos.avgPrice) * pos.qty * pos.multiplier;

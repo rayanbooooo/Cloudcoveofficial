@@ -214,6 +214,11 @@ describe('RiskEngine — controls and gates', () => {
     expect(blockedBy(evaluateRisk(optionEntry(), loss))).toBe('worker_loss');
   });
 
+  it("fails closed when a worker's day P&L is unknown (open position without a mark)", () => {
+    const unknown = riskState({ worker: { config: workerConfig(), autotradeEnabled: true, dayPnl: null, realizedToday: 0 } });
+    expect(blockedBy(evaluateRisk(optionEntry(), unknown))).toBe('worker_loss');
+  });
+
   it('enforces max trades per day and order rate', () => {
     expect(blockedBy(evaluateRisk(optionEntry(), riskState({ entriesToday: 10 })))).toBe('max_trades');
     expect(blockedBy(evaluateRisk(optionEntry(), riskState({ ordersLastMinute: 10 })))).toBe('order_rate');

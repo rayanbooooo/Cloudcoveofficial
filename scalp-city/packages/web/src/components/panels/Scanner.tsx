@@ -1,0 +1,131 @@
+import type { ConditionResult, WorkerView } from '@scalp-city/shared';
+import { countdown, humanize } from '../../lib/format';
+import { serverNow, useStore } from '../../store/store';
+import { ChargeBar, Check, cx, Panel } from '../ui';
+
+const RISK_LABELS: Record<string, string> = {
+  data_fresh: 'Data',
+  account: 'Account',
+  buying_power: 'Buying power',
+  liquidity: 'Liquidity',
+  max_positions: 'Position limit',
+  daily_loss: 'Daily loss',
+  market_open: 'Market open',
+  broker: 'Broker',
+};
+
+export function pickScannerWorker(workers: Record<string, WorkerView>, selected: string | null): WorkerView | null {
+  if (selected && workers[selected]) return workers[selected]!;
+  const list = Object.values(workers);
+  if (!list.length) return null;
+  return [...list].sort((a, b) => (b.signal.live?.charge ?? b.signal.charge) - (a.signal.live?.charge ?? a.signal.charge))[0]!;
+}
+
+export function ConditionList({ conditions }: { conditions: ConditionResult[] }) {
+  return (
+    <div>
+      {conditions.map((c) => (
+        <div key={c.id} className="flex items-baseline gap-2 py-[2px]" title={c.detail}>
+          <span className={cx('num w-3 text-[11px]', c.met ? 'text-call' : c.unavailable ? 'text-fg-3' : 'text-fg-3')}>{c.met ? '✓' : c.unavailable ? '·' : '✕'}</span>
+          <span className={cx('label-strong w-[112px] shrink-0 text-[10.5px]', c.met ? 'text-fg' : 'text-fg-3')}>{c.label}</span>
+          <span className="num min-w-0 truncate text-[10.5px] text-fg-3">{c.detail}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+/** Signal scanner (spec §21, §44, §84): every number is derived from real bars. */
+export function Scanner({ workerId, embedded }: { workerId?: string | null; embedded?: boolean }) {
+  const workers = useStore((s) => s.workers);
+  const selected = useStore((s) => s.ui.selectedWorker);
+  const orders = useStore((s) => s.orders);
+  const w = workerId ? (workers[workerId] ?? null) : pickScannerWorker(workers, selected);
+  if (!w) return null;
+  const sig = w.signal;
+  // Headline = the CONFIRMED evaluation (last closed bar): the only one that can trade.
+  // The forming-bar preview is shown separately and labelled as such.
+  const dir = sig.direction;
+  const color = dir === 'CALL' ? 'var(--color-call)' : dir === 'PUT' ? 'var(--color-put)' : 'var(--color-signal)';
+  const preview = sig.live;
+  const previewColor = preview?.direction === 'CALL' ? 'var(--color-call)' : preview?.direction === 'PUT' ? 'var(--color-put)' : 'var(--color-fg-2)';
+  const order = w.activeOrderId ? orders[w.activeOrderId] : null;
+  const risk = sig.lastRisk;
+  const now = serverNow();
+  const confirming = !!preview && preview.direction !== 'NEUTRAL' && preview.charge >= w.config.params.readyThreshold && sig.phase !== 'READY';
+
+  const body = (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-baseline justify-between">
+        <div className="flex items-baseline gap-2">
+          <span className="display text-[18px]" style={{ color }}>
+            {dir === 'NEUTRAL' ? 'NO SETUP' : dir}
+          </span>
+          <span className="label">{w.config.symbol} · {w.config.timeframe.replace('Min', 'm')}</span>
+        </div>
+        <span className="label-strong text-[11px]" style={{ color: sig.phase === 'READY' ? 'var(--color-call)' : 'var(--color-fg-2)' }}>
+          {sig.phase === 'READY' ? 'READY' : humanize(sig.phase)}
+        </span>
+      </div>
+      <ConditionList conditions={sig.conditions} />
+      <div>
+        <ChargeBar value={sig.charge} color={color} ghost={preview && preview.direction === dir ? preview.charge : undefined} />
+        <div className="mt-1 flex items-baseline justify-between">
+          <span className="num text-[13px] text-fg">
+            {sig.charge}% <span className="label">confirmed</span>
+          </span>
+          <span className="label">
+            {confirming
+              ? `confirming · bar closes ${countdown((sig.nextEvaluationAt ?? now) - now)}`
+              : sig.nextEvaluationAt
+                ? `next bar ${countdown(sig.nextEvaluationAt - now)}`
+                : 'market closed'}
+          </span>
+        </div>
+        {preview && (
+          <div className="label mt-0.5 flex justify-between !text-[9.5px]">
+            <span>
+              forming bar preview:{' '}
+              <span className="num" style={{ color: previewColor }}>
+                {preview.direction === 'NEUTRAL' ? 'no setup' : `${preview.direction} ${preview.charge}%`}
+              </span>
+            </span>
+            <span>{sig.consumed ? 'signal used' : 'preview never trades'}</span>
+          </div>
+        )}
+      </div>
+      {risk && (
+        <div className="border-t border-line pt-1.5">
+          <div className="label mb-1 flex justify-between">
+            <span>Risk check</span>
+            <span className={risk.approved ? '!text-call' : '!text-put'}>{risk.approved ? 'APPROVED' : 'BLOCKED'}</span>
+          </div>
+          <div className="grid grid-cols-2 gap-x-3">
+            {risk.checks
+              .filter((c) => RISK_LABELS[c.id] || !c.passed)
+              .slice(0, 10)
+              .map((c) => (
+                <Check key={c.id} ok={c.passed} label={RISK_LABELS[c.id] ?? c.label} detail={c.passed ? undefined : c.detail} />
+              ))}
+          </div>
+        </div>
+      )}
+      {order && (
+        <div className="flex items-center justify-between border-t border-line pt-1.5">
+          <span className="label">{order.purpose === 'ENTRY' ? 'Entry' : 'Exit'} order</span>
+          <span className="label-strong text-[11px]" style={{ color: order.state === 'FILLED' ? 'var(--color-call)' : 'var(--color-pending)' }}>
+            {humanize(order.state)} · {order.filledQty}/{order.qty}
+          </span>
+        </div>
+      )}
+      {w.unmanagedWarning && <div className="border-l-2 border-pending px-2 py-1 text-[11px] text-pending">{w.unmanagedWarning}</div>}
+    </div>
+  );
+
+  if (embedded) return body;
+  return (
+    <Panel title="Signal scanner" meta={w.config.name} accent={color}>
+      {body}
+    </Panel>
+  );
+}

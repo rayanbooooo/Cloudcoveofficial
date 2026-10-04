@@ -11,7 +11,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "migrate": "tsx src/cli/migrate.ts",
-    "user:create": "tsx src/cli/createUser.ts"
+    "user:create": "tsx src/cli/createUser.ts",
+    "demo": "tsx test/harness/devServer.ts"
   },
   "dependencies": {
     "@fastify/cookie": "^11.1.2",
