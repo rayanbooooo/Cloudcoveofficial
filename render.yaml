@@ -18,52 +18,25 @@ services:
     dockerContext: .
     # Change to main once this branch is merged.
     branch: claude/zen-franklin-lzwngb
-    region: virginia # US East: close to Alpaca; OANDA's servers are reachable from it as well
+    region: virginia # US East: close to Alpaca
     plan: starter # always on; free instances sleep, which a trading bot cannot do
     numInstances: 1
     healthCheckPath: /api/healthz
     # Deploy by hand, outside market hours: a deploy restarts the trader.
     autoDeploy: false
     envVars:
-      # Which broker trades: oanda = gold, Nasdaq 100, GBP/USD, EUR/JPY, US30 (CFDs/FX);
-      # alpaca = US stocks and options. Alpaca cannot trade the markets above.
+      # Which broker trades. alpaca = US stocks, ETFs and options (the default here).
+      # oanda = gold/Nasdaq/FX CFDs on an OANDA account: optional, add its env vars by hand
+      # in Render if you ever want it (GO_LIVE.md, Part A).
       - key: BROKER
-        value: oanda
-      # Start in PAPER (= OANDA fxTrade PRACTICE). Switching to LIVE happens later,
-      # deliberately (GO_LIVE.md).
+        value: alpaca
+      # Start in PAPER. Switching to LIVE happens later, deliberately (GO_LIVE.md).
       - key: TRADING_ENVIRONMENT
         value: paper
       - key: LIVE_TRADING_ENABLED
         value: "false"
-      # OANDA secrets: set in the Render dashboard, never in git or in chat.
-      # Leave the LIVE pair empty until you are ready for real money.
-      - key: OANDA_PRACTICE_TOKEN
-        sync: false
-      - key: OANDA_PRACTICE_ACCOUNT_ID
-        sync: false
-      - key: OANDA_LIVE_TOKEN
-        sync: false
-      - key: OANDA_LIVE_ACCOUNT_ID
-        sync: false
-      # The window (New York time) in which workers may open new positions.
-      - key: OANDA_SESSION
-        value: "09:30-16:00"
-      # Deliberately small starting limits for OANDA, in your account currency. They seed
-      # the risk settings on first boot; raise them in the app (Risk drawer) once results
-      # justify it. These are the limits that apply to OANDA; the Alpaca MAX_* block
-      # further down does not (it is share/option sized and would block every CFD order).
-      - key: OANDA_MAX_DAILY_LOSS
-        value: "100"
-      - key: OANDA_MAX_RISK_PER_TRADE
-        value: "20"
-      - key: OANDA_MAX_POSITION_NOTIONAL
-        value: "10000"
-      - key: OANDA_MAX_CONCURRENT_POSITIONS
-        value: "3"
-      - key: OANDA_MAX_TRADES_PER_DAY
-        value: "10"
-      # Alpaca secrets (only used when BROKER=alpaca). Render asks for these when you
-      # create the Blueprint; they stay empty if you only use OANDA.
+      # Alpaca secrets: Render asks for these when you create the Blueprint. They live only
+      # in Render's environment, never in git or in chat.
       - key: ALPACA_PAPER_API_KEY
         sync: false
       - key: ALPACA_PAPER_API_SECRET
