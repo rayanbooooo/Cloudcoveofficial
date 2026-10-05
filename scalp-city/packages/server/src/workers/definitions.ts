@@ -183,7 +183,7 @@ function etfWorkers(): WorkerSeed[] {
   });
   return [
     seed('etf-gold', 'GOLD (GLD)', 'GLD', '1Min', 1),
-    seed('etf-nasdaq', 'NASDAQ (QQQ)', 'QQQ', '1Min', 2),
+    seed('etf-nasdaq', 'NAS (QQQ)', 'QQQ', '1Min', 2),
     seed('etf-us30', 'US30 (DIA)', 'DIA', '1Min', 3),
     seed('etf-gbp', 'GBPUSD (FXB)', 'FXB', '5Min', 4),
     seed('etf-eur', 'EURO (FXE)', 'FXE', '5Min', 5),

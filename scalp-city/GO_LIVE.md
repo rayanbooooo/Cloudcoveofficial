@@ -192,7 +192,7 @@ previous copy finishes. The app says so and reconnects by itself; just wait.
 
 ### B3. How the ETF workers trade, and what protects you
 
-The five workers: **GOLD (GLD)**, **NASDAQ (QQQ)**, **US30 (DIA)**, **GBPUSD (FXB)**, **EURO (FXE)**.
+The five workers: **GOLD (GLD)**, **NAS (QQQ)**, **US30 (DIA)**, **GBPUSD (FXB)**, **EURO (FXE)**.
 
 - **One signal, mechanical rules.** Six checks (VWAP, EMA50, momentum, opening range, structure,
   volume) must all agree before an entry. Nothing here has been shown to make money; paper trading

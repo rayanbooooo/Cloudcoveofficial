@@ -269,7 +269,8 @@ function TowerBody({
             style={{ borderLeftColor: accentCss }}
             aria-label={`Open ${w.config.name} trading desk`}
           >
-            <span className="display text-[9px] tracking-[0.1em] text-fg">{w.config.name}</span>
+            {/* Phone: the market only ("GOLD"), the ticker in brackets is on the desk. */}
+            <span className="display text-[9px] tracking-[0.1em] text-fg">{w.config.name.replace(/\s*\([^)]*\)\s*$/, '')}</span>
           </button>
         ) : (
           <button
