@@ -12,6 +12,7 @@
  *
  *   npm run demo                     # Alpaca-style demo (QQQ/SPY/IWM) on http://127.0.0.1:8787
  *   DEMO_BROKER=oanda npm run demo   # OANDA-style demo: gold, NAS100, GBPUSD, EURJPY, US30
+ *   DEMO_OANDA_OFFERED=XAU_USD,GBP_USD,EUR_JPY DEMO_BROKER=oanda npm run demo   # an account that is not offered the others
  *   DEMO_AUTOTRADE=1 npm run demo    # also switch autotrading on (fake account)
  *
  * Hosting the demo behind a public URL (e.g. a Vercel Sandbox): set HOST=0.0.0.0,
@@ -249,11 +250,14 @@ async function mainOanda(): Promise<void> {
   const clock = new OffsetClock(virtualStart);
   const token = 'demo-harness-oanda-token-0123456789';
   const accountId = '101-004-99999999-001';
+  // DEMO_OANDA_OFFERED=XAU_USD,GBP_USD,EUR_JPY: an account that is not offered the other markets (see how the app copes).
+  const offered = (process.env.DEMO_OANDA_OFFERED ?? '').split(',').map((x) => x.trim()).filter(Boolean);
+  const startPrices = offered.length ? Object.fromEntries(Object.entries(OANDA_START).filter(([sym]) => offered.includes(sym))) : OANDA_START;
   const fake = new FakeOanda({
     clock,
     token,
     accountId,
-    instruments: OANDA_START,
+    instruments: startPrices,
     sessionDate: SESSION_DATE,
     historyPath: oandaPath,
     historyVolume: oandaVolume,
@@ -299,7 +303,7 @@ async function mainOanda(): Promise<void> {
   const startMinute = Math.floor(clock.now() / 60_000);
   const tape = setInterval(() => {
     const minute = Math.floor(clock.now() / 60_000) - startMinute;
-    for (const sym of Object.keys(OANDA_START)) {
+    for (const sym of Object.keys(startPrices)) {
       const m = fake.mid(sym);
       const drift = oandaDrift(sym, minute) / 150;
       const noise = (rnd() - 0.5) * (OANDA_NOISE[sym] ?? 0.0002) * 0.9;

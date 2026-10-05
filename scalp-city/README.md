@@ -31,6 +31,7 @@ npm run demo          # builds the UI, starts http://127.0.0.1:8787
 DEMO_AUTOTRADE=1 npm run demo   # same, with autotrading switched on so you can watch workers trade
 DEMO_SETUP=1 npm run demo       # no preset account: create your own in the browser (first-run flow)
 DEMO_BROKER=oanda DEMO_AUTOTRADE=1 npm run demo   # the OANDA-style demo: gold, NAS100, GBP/USD, EUR/JPY, US30
+DEMO_OANDA_OFFERED=XAU_USD,GBP_USD,EUR_JPY DEMO_BROKER=oanda npm run demo   # an account that is not offered the index CFDs
 ```
 
 `npm run demo` starts the **dev harness** (`packages/server/test/harness/devServer.ts`). It runs the real

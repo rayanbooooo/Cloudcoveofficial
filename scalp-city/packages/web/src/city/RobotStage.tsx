@@ -452,6 +452,7 @@ export function robotActivity(w: WorkerView): string {
     case 'LOSS':
       return 'Position closed at a loss';
     case 'STANDING_DOWN':
+      if (w.market && !w.market.listed) return `${name} is not offered to this account — nothing to trade`;
       return `Stood down${w.haltReason ? ` — ${w.haltReason}` : ''}`;
     case 'HALTED':
       return `Halted${w.haltReason ? ` — ${w.haltReason}` : ''}`;

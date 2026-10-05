@@ -737,6 +737,10 @@ export class Worker {
     if (this.transient) return { state: this.transient.state, text: this.transient.state === 'PROFIT' ? 'PROFIT LOCKED' : 'POSITION CLOSED' };
     if (activeOrder && !isTerminal(activeOrder.state)) return { state: 'ORDER_PENDING', text: `ORDER ${activeOrder.state.replace('_', ' ')}` };
     if (pos) return { state: 'IN_TRADE', text: `IN TRADE · ${directionLabel(pos.direction, pos.assetClass)}` };
+    // A market the broker does not offer this account has no data and can never be traded: say so instead of "monitoring".
+    if (this.config.instrument === 'CFD' && this.d.instruments.loaded && this.d.instruments.get(this.config.symbol) === null) {
+      return { state: 'STANDING_DOWN', text: 'NOT OFFERED TO THIS ACCOUNT' };
+    }
     if (!marketOpen) return { state: 'WATCHING', text: this.config.instrument === 'CFD' ? 'OUTSIDE SESSION · MONITORING' : 'MARKET CLOSED · MONITORING' };
     const stand = this.standDownReason();
     if (stand) return { state: 'STANDING_DOWN', text: stand };

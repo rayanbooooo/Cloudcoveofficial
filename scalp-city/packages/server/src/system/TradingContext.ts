@@ -259,9 +259,11 @@ export class TradingContext {
     if (!this.configured) {
       const what =
         this.venue === 'oanda'
-          ? `No OANDA ${this.env === 'live' ? 'live (fxTrade) token and account id' : 'practice token and account id'} configured`
+          ? this.env === 'live'
+            ? 'No OANDA live (fxTrade) credentials configured: set OANDA_LIVE_TOKEN and OANDA_LIVE_ACCOUNT_ID'
+            : 'No OANDA practice credentials configured: set OANDA_PRACTICE_TOKEN and OANDA_PRACTICE_ACCOUNT_ID'
           : `No Alpaca credentials configured for ${this.env.toUpperCase()}`;
-      this.setPhase('NOT_CONFIGURED', `${what}. Set them in the server environment and restart.`);
+      this.setPhase('NOT_CONFIGURED', this.venue === 'oanda' ? `${what} in the server environment, then restart.` : `${what}. Set them in the server environment and restart.`);
       return;
     }
     await this.workers.load();

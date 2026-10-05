@@ -57,6 +57,8 @@ describe('configured markets the account is not offered (app level)', () => {
       expect(w.market?.listed).toBe(false);
       expect(w.market?.plannedUnits).toBeNull();
       expect(w.market?.sizingNote).toContain('not offered');
+      expect(w.towerState).toBe('STANDING_DOWN'); // not "monitoring": there is nothing it could monitor
+      expect(w.statusText).toContain('NOT OFFERED');
     }
     const note = s.timeline.find((t) => t.title.startsWith('Not offered to this OANDA account'));
     expect(note?.severity).toBe('warn');

@@ -287,7 +287,7 @@ function TowerBody({
               {!w.autotradeEnabled && <span className="label text-[8px]">AUTO OFF</span>}
             </div>
             <div className="label-strong mt-px truncate text-[9px]" style={{ color: accentCss }}>
-              {STATE_LABEL[state]}
+              {w.market && !w.market.listed ? 'NOT OFFERED' : STATE_LABEL[state]}
               {used ? ' · SIGNAL USED' : ''}
               {w.unmanagedWarning ? ' · !' : ''}
             </div>

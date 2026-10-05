@@ -212,7 +212,7 @@ export function WorkerDesk() {
           </div>
         )}
 
-        <PriceChart symbol={w.config.symbol} markers={markers} levels={levels} defaultTf={w.config.timeframe} height={260} />
+        {!(w.market && !w.market.listed) && <PriceChart symbol={w.config.symbol} markers={markers} levels={levels} defaultTf={w.config.timeframe} height={260} />}
 
         <section>
           <div className="label mb-2">Signal scanner</div>
