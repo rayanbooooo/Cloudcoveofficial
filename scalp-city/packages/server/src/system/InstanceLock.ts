@@ -118,14 +118,21 @@ const STANDBY_HTML = `<!doctype html><html><head><meta charset="utf-8"><meta htt
 
 /**
  * Minimal server for a waiting instance: health checks pass (so a platform's
- * zero-downtime deploy can complete and stop the old instance), everything
- * else gets a self-refreshing "starting up" page. No trading happens here.
+ * zero-downtime deploy can complete and stop the old instance), API calls get a
+ * JSON "starting up" answer and everything else a self-refreshing "starting up"
+ * page. No trading happens here.
  */
 export async function startStandbyServer(host: string, port: number): Promise<{ port: number; close(): Promise<void> }> {
   const server = http.createServer((req, res) => {
     if (req.url?.startsWith('/api/healthz')) {
       res.writeHead(200, { 'content-type': 'application/json', 'cache-control': 'no-store' });
       res.end(JSON.stringify({ ok: true, phase: 'STANDBY' }));
+      return;
+    }
+    if (req.url?.startsWith('/api/')) {
+      // The app asks for data, not a page: answer in the shape it understands so it can say "starting up".
+      res.writeHead(503, { 'content-type': 'application/json', 'retry-after': '5', 'cache-control': 'no-store' });
+      res.end(JSON.stringify({ error: 'STARTING', message: 'The server is starting up. Wait a minute and try again.' }));
       return;
     }
     res.writeHead(503, { 'content-type': 'text/html; charset=utf-8', 'retry-after': '5', 'cache-control': 'no-store' });

@@ -62,6 +62,10 @@ describe('single-instance trading lock', () => {
     expect(await health.json()).toEqual({ ok: true, phase: 'STANDBY' });
     const api = await fetch(`http://127.0.0.1:${s.port}/api/orders`, { method: 'POST' });
     expect(api.status).toBe(503);
+    expect(await api.json()).toMatchObject({ error: 'STARTING' }); // the app can say "starting up" instead of failing to parse a page
+    const page = await fetch(`http://127.0.0.1:${s.port}/`);
+    expect(page.status).toBe(503);
+    expect(page.headers.get('content-type')).toContain('text/html');
     await s.close();
   });
 });

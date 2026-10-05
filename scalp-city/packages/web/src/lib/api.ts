@@ -43,7 +43,7 @@ export function setUnauthorizedHandler(fn: () => void): void {
 
 /** The server (or its host) is not answering with data: starting up, restarting, or the wrong address. */
 export function isUnavailable(err: unknown): boolean {
-  return err instanceof ApiError && (err.code === 'UNAVAILABLE' || err.code === 'UNREACHABLE');
+  return err instanceof ApiError && (err.code === 'UNAVAILABLE' || err.code === 'UNREACHABLE' || err.code === 'STARTING');
 }
 
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
