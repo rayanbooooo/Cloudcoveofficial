@@ -272,6 +272,7 @@ set's workers and history stay in the database untouched.
 |---|---|
 | The app says "The server is starting up" | Normal for a minute or two after a deploy: the previous copy is finishing. It reconnects by itself. If it lasts more than a few minutes, check Render → Logs, and that only one `scalp-city` service exists. |
 | An entry is blocked: "one share costs … over the … position limit" | The position size limit is lower than one share of that ETF. Raise it in the Risk drawer (it asks for confirmation). |
+| On first start the app halts with "unexpected position" for QQQ, GLD, DIA, FXB or FXE | Your Alpaca account already holds shares of an ETF the bot trades, and Scalp City has no record of opening them, so it stops to be safe. Review them in the Health drawer, then **Accept broker state**. The bot only ever manages positions it opened: it will not sell your shares, but that worker will not trade that symbol while you hold them. |
 | A worker shows a stale-data or "spread too wide" block | The bot will not trade on data older than 5 seconds or a spread too wide for its stop. Normal for FXB and FXE on the free feed. |
 | Phase `NOT_CONFIGURED` | Token/keys missing or mistyped for the current environment (Render → Environment). |
 | OANDA: `not offered to this account` | Your OANDA account cannot trade that instrument; the worker won't trade it and the other markets are unaffected. The doctor lists exactly which markets your account is offered. |
