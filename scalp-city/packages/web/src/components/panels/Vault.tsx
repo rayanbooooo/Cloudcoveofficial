@@ -7,6 +7,7 @@ export function Vault() {
   const a = useStore((s) => s.account);
   const positions = useStore((s) => s.positions.length);
   const workers = useStore((s) => s.workerOrder.length);
+  const usesOptions = useStore((s) => Object.values(s.workers).some((w) => w.config.instrument === 'OPTIONS'));
   const active = useStore((s) => Object.values(s.workers).filter((w) => w.autotradeEnabled).length);
   const openDrawer = useStore((s) => s.openDrawer);
   if (!a) return null;
@@ -47,9 +48,15 @@ export function Vault() {
             <Stat label="Buying power">
               <Money value={a.buyingPower} />
             </Stat>
-            <Stat label="Options BP">
-              <Money value={a.optionsBuyingPower} />
-            </Stat>
+            {usesOptions ? (
+              <Stat label="Options BP">
+                <Money value={a.optionsBuyingPower} />
+              </Stat>
+            ) : (
+              <Stat label="Cash">
+                <Money value={a.cash} />
+              </Stat>
+            )}
           </>
         )}
         <Stat label="Positions">

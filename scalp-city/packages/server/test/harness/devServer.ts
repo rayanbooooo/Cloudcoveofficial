@@ -11,6 +11,7 @@
  * Prices are synthetic. Nothing it shows says anything about real markets.
  *
  *   npm run demo                     # Alpaca-style demo (QQQ/SPY/IWM) on http://127.0.0.1:8787
+ *   DEMO_SET=options npm run demo    # Alpaca demo with the classic QQQ/SPY/IWM options workers (default: ETF shares)
  *   DEMO_BROKER=oanda npm run demo   # OANDA-style demo: gold, NAS100, GBPUSD, EURJPY, US30
  *   DEMO_OANDA_OFFERED=XAU_USD,GBP_USD,EUR_JPY DEMO_BROKER=oanda npm run demo   # an account that is not offered the others
  *   DEMO_AUTOTRADE=1 npm run demo    # also switch autotrading on (fake account)
@@ -44,6 +45,9 @@ const SETUP = ['1', 'true', 'yes'].includes((process.env.DEMO_SETUP ?? '').toLow
 const AUTOTRADE = ['1', 'true', 'yes'].includes((process.env.DEMO_AUTOTRADE ?? '').toLowerCase());
 const START = process.env.DEMO_START ?? '11:00:30';
 const BROKER = (process.env.DEMO_BROKER ?? 'alpaca').toLowerCase();
+/** Alpaca demo: the ETF share workers (default) or the classic QQQ/SPY/IWM options workers. */
+const SET = (process.env.DEMO_SET ?? 'etf').toLowerCase();
+if (SET !== 'etf' && SET !== 'options') throw new Error(`DEMO_SET must be etf or options, got "${SET}"`);
 if (BROKER !== 'alpaca' && BROKER !== 'oanda') throw new Error(`DEMO_BROKER must be alpaca or oanda, got "${BROKER}"`);
 
 /** Real-time clock shifted into the fake session, so time flows at 1× from START. */
@@ -68,8 +72,22 @@ function mulberry32(seed: number): () => number {
   };
 }
 
-/** Morning history per symbol (minute i since the open): QQQ sells off, SPY rallies, IWM chops. */
+const ETF_START: Record<string, number> = { GLD: 300, QQQ: 600, DIA: 440, FXB: 125, FXE: 105 };
+
+/** Morning history per symbol (minute i since the open): QQQ sells off, SPY rallies, IWM chops. ETF set: GLD sells off, DIA trends down, QQQ rallies, FXB/FXE chop. */
 function historyPath(symbol: string, i: number, base: number): number {
+  if (SET === 'etf') {
+    switch (symbol) {
+      case 'GLD':
+        return i < 15 ? base + 0.15 * Math.sin(i) : i < 60 ? base - ((i - 15) * 1.5) / 45 : base - 1.5 + 0.02 * Math.sin(i);
+      case 'QQQ':
+        return i < 15 ? base + 0.3 * Math.sin(i) : base + ((i - 15) * 2.4) / 75 + 0.08 * Math.sin(i / 2);
+      case 'DIA':
+        return i < 15 ? base + 0.2 * Math.sin(i) : base - ((i - 15) * 2.0) / 75 + 0.05 * Math.sin(i / 2);
+      default:
+        return base + 0.04 * Math.sin(i / 5) + 0.015 * Math.sin(i / 1.7);
+    }
+  }
   switch (symbol) {
     case 'QQQ':
       return i < 15 ? base + 0.3 * Math.sin(i) : i < 60 ? base - ((i - 15) * 3) / 45 : base - 3 + 0.05 * Math.sin(i);
@@ -82,6 +100,10 @@ function historyPath(symbol: string, i: number, base: number): number {
 
 /** Opening act for the live session: QQQ reverses up, SPY rolls over. Then a seeded regime walk. */
 function driftPerMinute(symbol: string, minute: number, regime: number): number {
+  if (SET === 'etf') {
+    if (minute < 6) return symbol === 'GLD' ? 0.45 : symbol === 'DIA' ? -0.3 : 0;
+    return regime * (symbol === 'FXB' || symbol === 'FXE' ? 0.01 : 0.12);
+  }
   if (minute < 6) return symbol === 'QQQ' ? 0.8 : symbol === 'SPY' ? -0.55 : 0;
   const scale = symbol === 'IWM' ? 0.08 : 0.25;
   return regime * scale;
@@ -146,7 +168,7 @@ async function main(): Promise<void> {
     clock,
     keyId: 'PKDEMOHARNESS',
     secretKey: 'demo-harness-secret',
-    symbols: { QQQ: 600, SPY: 570, IWM: 220 },
+    symbols: SET === 'etf' ? ETF_START : { QQQ: 600, SPY: 570, IWM: 220 },
     sessionDate: SESSION_DATE,
     historyPath,
     historyVolume: (_s, i) => 8_000 + Math.round(4_000 * Math.abs(Math.sin(i / 3))),
@@ -162,7 +184,7 @@ async function main(): Promise<void> {
     ALPACA_DATA_URL: fake.url,
     ALPACA_DATA_STREAM_URL: fake.wsUrl,
     ALPACA_OPTIONS_FEED: 'opra',
-    ALPACA_WORKER_SET: 'options',
+    ALPACA_WORKER_SET: SET,
     SESSION_SECRET: 'demo-harness-session-secret-not-for-production',
     DATABASE_URL: 'pglite://memory', // the harness passes its own in-memory database below
     MAX_POSITION_SIZE: '5000',
@@ -188,11 +210,21 @@ async function main(): Promise<void> {
 
   // Synthetic tape: ~2.5 prints per second per symbol, official bars on the minute.
   const rnd = mulberry32(20261005);
-  const regimes = new Map<string, number>([
-    ['QQQ', 1],
-    ['SPY', -1],
-    ['IWM', 0],
-  ]);
+  const regimes = new Map<string, number>(
+    SET === 'etf'
+      ? [
+          ['GLD', 1],
+          ['QQQ', 1],
+          ['DIA', -1],
+          ['FXB', 0],
+          ['FXE', 0],
+        ]
+      : [
+          ['QQQ', 1],
+          ['SPY', -1],
+          ['IWM', 0],
+        ],
+  );
   let lastMinute = Math.floor(clock.now() / 60_000);
   const startMinute = lastMinute;
   const tape = setInterval(() => {
@@ -205,7 +237,7 @@ async function main(): Promise<void> {
     const m = minute - startMinute;
     for (const [s, p] of fake.prices) {
       const drift = driftPerMinute(s, m, regimes.get(s) ?? 0) / 150;
-      const noise = (rnd() - 0.5) * (s === 'IWM' ? 0.03 : 0.06);
+      const noise = (rnd() - 0.5) * (s === 'IWM' || s === 'FXB' || s === 'FXE' ? 0.03 : 0.06);
       fake.trade(s, p.last + drift + noise, Math.floor(50 + rnd() * 400));
     }
   }, 400);
