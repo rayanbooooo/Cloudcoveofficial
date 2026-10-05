@@ -55,6 +55,14 @@ export class OandaMarketDataProvider implements MarketDataProvider {
   private readonly clock: Clock;
   private readonly acct: string;
   private symbols: string[] = [];
+  /**
+   * Markets this account is offered (null until read). OANDA refuses a whole pricing stream or request that
+   * names one market the account is not offered, so only offered markets are ever subscribed.
+   */
+  private offered: Set<string> | null = null;
+  private offeredLoading: Promise<void> | null = null;
+  /** The first read of the account's market list has finished (successfully or not): the stream may start. */
+  private settled = false;
   private handlers = new Set<(e: ProviderEvent) => void>();
   private statusHandlers = new Set<(s: DataStreamName, st: StreamStatus) => void>();
   private started = false;
@@ -72,7 +80,7 @@ export class OandaMarketDataProvider implements MarketDataProvider {
     this.stream = new OandaStream({
       name: 'oanda-pricing',
       url: () => {
-        const q = new URLSearchParams({ instruments: this.symbols.join(','), snapshot: 'true' });
+        const q = new URLSearchParams({ instruments: this.effective().join(','), snapshot: 'true' });
         return `${opts.streamUrl}${this.acct}/pricing/stream?${q.toString()}`;
       },
       token: opts.credentials.token,
@@ -82,14 +90,51 @@ export class OandaMarketDataProvider implements MarketDataProvider {
     this.stream.onMessage((m) => this.onPrice(m));
     this.stream.onStatus((s) => {
       for (const h of this.statusHandlers) h('stock', s);
+      // A refused stream may mean the account's market list changed: read it again before the next attempt.
+      if (s.state === 'RECONNECTING' && s.lastError && /\b(400|40[34])\b|instrument/i.test(s.lastError)) void this.loadOffered();
     });
+  }
+
+  /** The subscribed markets the account is offered (every subscribed market while its list is unknown). */
+  private effective(): string[] {
+    const offered = this.offered;
+    return offered ? this.symbols.filter((s) => offered.has(s)) : this.symbols;
+  }
+
+  private loadOffered(): Promise<void> {
+    if (this.offeredLoading) return this.offeredLoading;
+    this.offeredLoading = this.http
+      .get<Raw>(`${this.acct}/instruments`)
+      .then((r) => {
+        this.offered = new Set(((r.instruments ?? []) as Raw[]).map((i) => String(i.name)));
+        const missing = this.symbols.filter((s) => !this.offered!.has(s));
+        if (missing.length) this.opts.logger.warn({ markets: missing }, 'markets not offered to this OANDA account are not subscribed');
+      })
+      .catch((err) => {
+        this.opts.logger.warn({ err: (err as Error).message }, 'could not read the account market list; subscribing to every configured market');
+      })
+      .finally(() => {
+        this.offeredLoading = null;
+      });
+    return this.offeredLoading;
+  }
+
+  /** Make sure the account's market list has been read once (history and snapshots must not name unoffered markets). */
+  private async knownOffered(): Promise<void> {
+    if (this.offered === null) await this.loadOffered();
   }
 
   start(): void {
     if (this.started) return;
     this.started = true;
-    if (this.symbols.length) this.stream.start();
+    void this.begin();
     this.timer = setInterval(() => void this.tick(), 500);
+  }
+
+  private async begin(): Promise<void> {
+    await this.loadOffered();
+    this.settled = true;
+    if (this.started && this.effective().length) this.stream.start();
   }
 
   async stop(): Promise<void> {
@@ -103,8 +148,8 @@ export class OandaMarketDataProvider implements MarketDataProvider {
     const next = [...new Set(symbols)].sort();
     if (next.join(',') === this.symbols.join(',')) return;
     this.symbols = next;
-    if (!this.started) return;
-    if (next.length === 0) void this.stream.stop();
+    if (!this.started || !this.settled) return; // begin() starts the stream once the account's market list is known
+    if (this.effective().length === 0) void this.stream.stop();
     else if (this.stream.getStatus().state === 'DISCONNECTED') this.stream.start();
     else this.stream.forceReconnect('subscription changed');
   }
@@ -170,18 +215,19 @@ export class OandaMarketDataProvider implements MarketDataProvider {
 
   /** Exposed for tests: fetch the candles of the minute that just closed. */
   async tick(): Promise<void> {
-    if (this.polling || this.symbols.length === 0) return;
+    const symbols = this.effective();
+    if (this.polling || symbols.length === 0) return;
     const now = this.clock.now();
     const delay = this.opts.candleDelayMs ?? 1500;
     const closed = Math.floor((now - delay) / MINUTE) * MINUTE - MINUTE; // start of the newest closed minute
     if (!this.pending || closed > this.pending.minute) this.pending = { minute: closed, attempt: 0, nextAt: 0 };
     const p = this.pending;
     if (p.attempt > 4 || now < p.nextAt) return;
-    if (this.symbols.every((s) => (this.lastBar.get(s) ?? -1) >= p.minute)) return;
+    if (symbols.every((s) => (this.lastBar.get(s) ?? -1) >= p.minute)) return;
     this.polling = true;
     try {
       let missing = 0;
-      for (const s of this.symbols) {
+      for (const s of symbols) {
         if ((this.lastBar.get(s) ?? -1) >= p.minute) continue;
         const got = await this.pollSymbol(s, p.minute).catch((err) => {
           this.opts.logger.warn({ symbol: s, err: (err as Error).message }, 'candle poll failed');
@@ -216,33 +262,47 @@ export class OandaMarketDataProvider implements MarketDataProvider {
   // ── History & snapshots ──────────────────────────────────────────────────
 
   async getHistoricalBars(symbols: string[], startMs: number, endMs: number): Promise<Bar[]> {
+    await this.knownOffered();
+    const offered = this.offered;
     const out: Bar[] = [];
+    let failure: unknown = null;
     for (const symbol of symbols) {
-      let from = Math.floor(startMs / MINUTE) * MINUTE;
-      for (let page = 0; page < 20 && from < endMs; page++) {
-        const r = await this.http.get<Raw>(`/v3/instruments/${encodeURIComponent(symbol)}/candles`, {
-          price: 'M',
-          granularity: 'M1',
-          from: new Date(from).toISOString(),
-          count: 5000,
-        });
-        const bars = ((r.candles ?? []) as Raw[])
-          .filter((c) => c.complete === true)
-          .map((c) => candleToBar(symbol, c, 'historical'))
-          .filter((b): b is Bar => b !== null && b.t < endMs);
-        if (bars.length === 0) break;
-        out.push(...bars);
-        const last = bars[bars.length - 1]!.t;
-        this.lastBar.set(symbol, Math.max(this.lastBar.get(symbol) ?? -1, last));
-        if (bars.length < 4000) break;
-        from = last + MINUTE;
+      if (offered && !offered.has(symbol)) continue;
+      try {
+        let from = Math.floor(startMs / MINUTE) * MINUTE;
+        for (let page = 0; page < 20 && from < endMs; page++) {
+          const r = await this.http.get<Raw>(`/v3/instruments/${encodeURIComponent(symbol)}/candles`, {
+            price: 'M',
+            granularity: 'M1',
+            from: new Date(from).toISOString(),
+            count: 5000,
+          });
+          const bars = ((r.candles ?? []) as Raw[])
+            .filter((c) => c.complete === true)
+            .map((c) => candleToBar(symbol, c, 'historical'))
+            .filter((b): b is Bar => b !== null && b.t < endMs);
+          if (bars.length === 0) break;
+          out.push(...bars);
+          const last = bars[bars.length - 1]!.t;
+          this.lastBar.set(symbol, Math.max(this.lastBar.get(symbol) ?? -1, last));
+          if (bars.length < 4000) break;
+          from = last + MINUTE;
+        }
+      } catch (err) {
+        // One market's history failing must not cost the others theirs.
+        failure = err;
+        this.opts.logger.warn({ symbol, err: (err as Error).message }, 'history for this market could not be loaded');
       }
     }
+    if (out.length === 0 && failure) throw failure;
     out.sort((a, b) => a.t - b.t || a.symbol.localeCompare(b.symbol));
     return out;
   }
 
-  async getStockSnapshots(symbols: string[]): Promise<Record<string, StockSnapshot>> {
+  async getStockSnapshots(requested: string[]): Promise<Record<string, StockSnapshot>> {
+    await this.knownOffered();
+    const offered = this.offered;
+    const symbols = offered ? requested.filter((s) => offered.has(s)) : requested;
     const out: Record<string, StockSnapshot> = {};
     if (symbols.length === 0) return out;
     const r = await this.http.get<Raw>(`${this.acct}/pricing`, { instruments: symbols.join(',') });

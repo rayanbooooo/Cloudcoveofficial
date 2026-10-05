@@ -93,7 +93,13 @@ npm run dev
   not traded size, and the UI says so; VWAP and relative volume are computed from it.
 - **Instruments** come from `OANDA_INSTRUMENTS` (default `XAU_USD, NAS100_USD, GBP_USD, EUR_JPY,
   US30_USD`) and each worker is seeded for one of them. The app reads your account's instrument list: a
-  market your OANDA entity does not offer shows *not offered to this account* and is never traded.
+  market your OANDA entity does not offer shows *not offered to this account* and is never traded. It is
+  left out of every price request and stream (OANDA refuses a request that names a market the account is
+  not offered), so it cannot take the other markets down.
+- **`npm run oanda:doctor`** (on Render: `node packages/server/dist/oanda-doctor.js`) is a read-only
+  pre-flight check using the same settings: token and account id, which markets your account is offered
+  and their size/margin rules, live prices, candles, both streams and the clock. It places nothing and
+  never prints the token.
 - **Trading window.** OANDA trades nearly 24 hours, so new positions open only inside `OANDA_SESSION`
   (default `09:30-16:00` New York, weekdays, US holidays skipped); OANDA's per-market `tradeable` flag
   has the last word.
@@ -243,7 +249,7 @@ live in the panels anyway.
 ## Tests
 
 ```bash
-npm test         # 214 tests (31 shared + 183 server), ~40 s, no network, no database server needed
+npm test         # 220 tests (31 shared + 189 server), ~40 s, no network, no database server needed
 TEST_DATABASE_URL=postgres://… npm test   # also runs the 2 single-instance-lock tests against a real PostgreSQL
 npm run typecheck
 ```
@@ -261,6 +267,7 @@ npm run typecheck
 | `db` | Migrations and the audit log's immutability triggers. |
 | `e2e.paper` | Boots the real app against `FakeAlpaca` under a virtual clock and runs the full flow end to end. |
 | `oanda`, `oandaStream`, `oandaDayPnl` | The OANDA adapter against `FakeOanda`: order mapping, precision and price bounds, ambiguous-submit resolution, transaction-stream replay after a drop, clock skew, day P&L from transactions. |
+| `oandaOffered` | A configured market the account is not offered never takes the others down: the app still reaches READY, prices and sizes the offered markets, and reports the missing ones; the adapter falls back market by market when OANDA refuses a request. |
 | `cfd` | CFD risk and sizing: risk-per-trade units, notional and margin caps, stop-side checks, long and short, fail-closed cases. |
 | `e2e.oanda` | The full OANDA flow end to end: sizing, FOK entry with a broker-held stop, fills from the transaction stream, exits, ledger, reconciliation. |
 

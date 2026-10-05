@@ -1,7 +1,7 @@
 import { defineConfig } from 'tsup';
 
 export default defineConfig({
-  entry: { index: 'src/index.ts', migrate: 'src/cli/migrate.ts', 'create-user': 'src/cli/createUser.ts' },
+  entry: { index: 'src/index.ts', migrate: 'src/cli/migrate.ts', 'create-user': 'src/cli/createUser.ts', 'oanda-doctor': 'src/cli/oandaDoctor.ts' },
   format: ['esm'],
   platform: 'node',
   target: 'node22',

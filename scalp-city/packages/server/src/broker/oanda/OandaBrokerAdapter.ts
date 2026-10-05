@@ -107,6 +107,8 @@ export class OandaBrokerAdapter implements BrokerAdapter {
   private mids = new Map<string, number>();
   private instrumentList: BrokerInstrument[] | null = null;
   private instrumentsAt = 0;
+  /** Markets OANDA refused in a pricing request (not offered to this account): left out of later requests. */
+  private excluded = new Set<string>();
 
   constructor(private readonly opts: OandaBrokerAdapterOptions) {
     this.env = opts.env;
@@ -422,29 +424,74 @@ export class OandaBrokerAdapter implements BrokerAdapter {
     return f > 0 ? f : null;
   }
 
+  /**
+   * The markets to keep priced: the configured ones the account is actually
+   * offered (OANDA refuses a whole pricing request that names one it does not
+   * offer), minus any it has refused before, plus whatever is held right now.
+   */
+  private pricedInstruments(): string[] {
+    const offered = this.instrumentList ? new Set(this.instrumentList.map((i) => i.symbol)) : null;
+    const symbols = new Set(this.opts.instruments.filter((s) => (offered ? offered.has(s) : true) && !this.excluded.has(s)));
+    for (const t of this.trades.values()) symbols.add(t.instrument);
+    return [...symbols];
+  }
+
+  private pricingRequest(symbols: string[]) {
+    return this.http.getWithDate<Raw>(`${this.acct}/pricing`, { instruments: symbols.join(','), includeHomeConversions: true });
+  }
+
   /** Latest prices and OANDA's own home-currency conversion factors (also the clock reading). */
   private async refreshPricing(): Promise<{ time: number | null; date: number | null }> {
-    const symbols = new Set(this.opts.instruments);
-    for (const t of this.trades.values()) symbols.add(t.instrument);
-    const r = await this.http.getWithDate<Raw>(`${this.acct}/pricing`, { instruments: [...symbols].join(','), includeHomeConversions: true });
-    const body = r.body ?? {};
-    for (const p of (body.prices ?? []) as Raw[]) {
-      const bid = num(p.bids?.[0]?.price ?? p.closeoutBid);
-      const ask = num(p.asks?.[0]?.price ?? p.closeoutAsk);
-      if (bid !== null && ask !== null) this.mids.set(String(p.instrument), (bid + ask) / 2);
+    if (!this.instrumentList) await this.getInstruments().catch(() => undefined);
+    let symbols = this.pricedInstruments();
+    if (symbols.length === 0) symbols = [...this.opts.instruments]; // nothing known yet: ask, and let OANDA say what it refuses
+    const bodies: { body: Raw; date: number | null }[] = [];
+    try {
+      const r = await this.pricingRequest(symbols);
+      bodies.push({ body: r.body ?? {}, date: r.date });
+    } catch (err) {
+      // One market the account is not offered makes OANDA refuse the whole request. Price the others one by
+      // one rather than lose the clock reading and the currency conversions for every market.
+      if (!(err instanceof BrokerError) || err.kind !== 'REJECTED' || symbols.length < 2) throw err;
+      for (const s of symbols) {
+        try {
+          const r = await this.pricingRequest([s]);
+          bodies.push({ body: r.body ?? {}, date: r.date });
+        } catch (e) {
+          if (e instanceof BrokerError && e.kind === 'REJECTED') {
+            this.excluded.add(s);
+            this.opts.logger.warn({ instrument: s, reason: e.message }, 'OANDA refused to price this market; leaving it out');
+          } else throw e;
+        }
+      }
+      if (bodies.length === 0) throw err;
     }
-    for (const c of (body.homeConversions ?? []) as Raw[]) {
-      this.conversions.set(String(c.currency), { positionValue: num(c.positionValue), accountLoss: num(c.accountLoss) });
+    for (const { body } of bodies) {
+      for (const p of (body.prices ?? []) as Raw[]) {
+        const bid = num(p.bids?.[0]?.price ?? p.closeoutBid);
+        const ask = num(p.asks?.[0]?.price ?? p.closeoutAsk);
+        if (bid !== null && ask !== null) this.mids.set(String(p.instrument), (bid + ask) / 2);
+      }
+      for (const c of (body.homeConversions ?? []) as Raw[]) {
+        this.conversions.set(String(c.currency), { positionValue: num(c.positionValue), accountLoss: num(c.accountLoss) });
+      }
+      if (Array.isArray(body.homeConversions)) this.conversionsAt = this.clock.now();
     }
-    if (Array.isArray(body.homeConversions)) this.conversionsAt = this.clock.now();
-    return { time: oandaTime(body.time), date: r.date };
+    const first = bodies[0]!;
+    return { time: oandaTime(first.body.time), date: first.date };
   }
 
   // ── Clock & calendar (configured trading window) ───────────────────────
 
   async getClock(): Promise<BrokerClock> {
     const sent = this.clock.now();
-    const r = await this.refreshPricing();
+    // The pricing response carries OANDA's clock to the millisecond. If pricing is unavailable for any reason
+    // (no market of the account is priced), the account summary's HTTP Date header (second resolution) still is.
+    const r = await this.refreshPricing().catch(async (err) => {
+      const s = await this.http.getWithDate<Raw>(`${this.acct}/summary`).catch(() => null);
+      if (!s || s.date === null) throw err;
+      return { time: null, date: s.date };
+    });
     const receivedAt = this.clock.now();
     // The pricing response's own time is OANDA's clock to the millisecond; the HTTP Date header is
     // only to the second but is unambiguous. If the two disagree by more than 2s the "time" field is

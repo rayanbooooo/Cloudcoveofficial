@@ -196,7 +196,9 @@ export class ViewBuilder {
   quotes(ctx: TradingContext): Record<string, SymbolQuoteView> {
     const out: Record<string, SymbolQuoteView> = {};
     const now = this.clock.now();
-    for (const symbol of this.config.symbols) {
+    // Only markets the data service tracks: one the broker does not offer this account has no data to show.
+    const symbols = ctx.configured ? ctx.marketData.symbols : this.config.symbols;
+    for (const symbol of symbols) {
       if (!ctx.configured) {
         out[symbol] = { symbol, last: null, lastTradeAt: null, bid: null, ask: null, quoteAt: null, tradeable: null, lastEventAt: null, ageMs: null, stale: true, prevClose: null, change: null, changePct: null, sessionVolume: null, vwap: null, ema50: null, atr: null };
         continue;
@@ -246,7 +248,7 @@ export class ViewBuilder {
     const a = ctx.configured ? ctx.account.account : null;
     const dayPnl = ctx.configured ? ctx.account.dayPnl() : null;
     const reasons = ctx.haltReasons();
-    const latencies = ctx.configured ? this.config.symbols.map((s) => ctx.marketData.freshness(s).ageMs).filter((x): x is number => x !== null) : [];
+    const latencies = ctx.configured ? ctx.marketData.symbols.map((s) => ctx.marketData.freshness(s).ageMs).filter((x): x is number => x !== null) : [];
     const brokerStatus = ctx.configured ? ctx.account.status(ctx.broker.tradeStreamStatus().state === 'CONNECTED').status : 'NOT_CONFIGURED';
     return {
       dailyPnl: dayPnl,

@@ -133,6 +133,19 @@ export class MarketDataService {
     return [...this.stores.keys()];
   }
 
+  /**
+   * Stop tracking symbols the broker does not offer this account. They will never have data, so they must not
+   * count as stale (which would block trading in the markets that do work). Call before start().
+   */
+  restrictTo(symbols: string[]): void {
+    const keep = new Set(symbols);
+    for (const s of [...this.stores.keys()]) {
+      if (keep.has(s)) continue;
+      this.stores.delete(s);
+      this.live.delete(s);
+    }
+  }
+
   async start(): Promise<void> {
     this.offs.push(this.provider.onEvent((e) => this.handle(e)));
     this.offs.push(this.provider.onStatus((stream, status) => this.onStreamStatus(stream, status)));

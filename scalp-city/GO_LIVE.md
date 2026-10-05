@@ -34,8 +34,9 @@ risk limits and circuit breakers are kept per broker, so switching later never m
   password.
 - **Which instruments your account may trade.** CFDs on indices and metals are not offered to
   every OANDA account (it depends on the OANDA entity and your region). The app reads the
-  account's own instrument list: any worker whose market is not offered shows *"not offered to
-  this account"* and never trades. If you only get FX pairs, that is your account, not a bug.
+  account's own instrument list and leaves out any market that is not offered: its worker shows
+  *"not offered to this account"* and never trades, a note appears in the timeline, and the other
+  markets are unaffected. If you only get FX pairs, that is your account, not a bug.
 - **A Render account with a card** (an always-on web service plus a database; check Render's pricing).
 
 ### A1. Deploy, in PRACTICE first
@@ -71,6 +72,13 @@ hand:
 
 ### A2. Prove the connection on PRACTICE (required)
 
+- **Run the doctor first.** It is a read-only check that uses the same settings as the app and
+  tells you, before any order exists, whether the token and account id work, **which of the five
+  markets your account is offered** (with their size and margin rules), whether live prices and
+  candles come back, whether both streams stay up, and how far the clock is from OANDA's. In
+  Render open scalp-city → **Shell** and run `node packages/server/dist/oanda-doctor.js` (from a
+  checkout: `npm run oanda:doctor`). It places and changes nothing and never prints the token, so
+  its output is safe to copy when asking for help. Fix every ✖ before going on.
 - The top bar shows **PRACTICE**, `BROKER CONNECTED` with your masked account, and `DATA LIVE`.
 - **Health drawer:** all green: broker, the *OANDA transaction stream*, the *OANDA price stream*,
   clock, reconciliation. The Market panel shows the five markets with live prices.
@@ -223,7 +231,8 @@ Do this outside market hours.
 | Symptom | What it means / what to do |
 |---|---|
 | Phase `NOT_CONFIGURED` | Token/keys missing or mistyped for the current environment (Render → Environment). |
-| OANDA: `not offered to this account` | Your OANDA account cannot trade that instrument; the worker won't trade it. |
+| OANDA: `not offered to this account` | Your OANDA account cannot trade that instrument; the worker won't trade it and the other markets are unaffected. The doctor lists exactly which markets your account is offered. |
+| OANDA: nothing connects | Run `node packages/server/dist/oanda-doctor.js` in the Render Shell: it names the failing step (token, account id, practice vs live, instruments, prices, streams, clock). |
 | OANDA: market shows `CLOSED` | OANDA reports that market as not tradeable right now; entries wait. |
 | `NO BROKER-SIDE STOP` | A CFD position has no stop at OANDA (it was removed or canceled there). While Scalp City runs it still exits at its own stop, but if the app goes down nothing protects the position: close it, or add a stop in OANDA's platform. |
 | Readiness item red | The checklist says exactly which item; LIVE stays locked until it's fixed. |

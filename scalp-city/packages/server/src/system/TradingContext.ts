@@ -1,5 +1,5 @@
 import { DateTime } from 'luxon';
-import { maskAccountNumber, type HaltReason, type SystemPhase, type TradingEnvironment, type Venue } from '@scalp-city/shared';
+import { instrumentName, maskAccountNumber, type HaltReason, type SystemPhase, type TradingEnvironment, type Venue } from '@scalp-city/shared';
 import { AccountService } from '../account/AccountService.js';
 import type { AuditLog } from '../audit/AuditLog.js';
 import { AlpacaBrokerAdapter } from '../broker/alpaca/AlpacaBrokerAdapter.js';
@@ -282,6 +282,29 @@ export class TradingContext {
     }
   }
 
+  /**
+   * Markets the broker does not offer this account (e.g. index CFDs or metals for some OANDA entities) can never
+   * have data. Leave them out of market data so they neither break the other markets' feed nor read as "stale";
+   * their workers keep reporting that the market is not offered and never trade.
+   */
+  private dropUnofferedMarkets(): void {
+    if (!this.instruments.supported || !this.instruments.loaded) return;
+    const offered = this.o.config.symbols.filter((s) => this.instruments.get(s) !== null);
+    const missing = this.o.config.symbols.filter((s) => !offered.includes(s));
+    this.marketData.restrictTo(offered);
+    if (missing.length === 0) return;
+    const names = missing.map((s) => instrumentName(s)).join(', ');
+    this.o.logger.warn({ markets: missing }, 'markets not offered to this broker account; they will not be traded');
+    this.timeline.add({
+      kind: 'system',
+      severity: 'warn',
+      workerId: null,
+      symbol: null,
+      title: `Not offered to this ${this.broker.name} account: ${names}`,
+      detail: 'Their workers stay idle. Check the account type or region with the broker, or remove the market from the configuration.',
+    });
+  }
+
   private async recover(): Promise<void> {
     this.setPhase('RECOVERING', 'reloading local state');
     await this.ledger.load();
@@ -291,6 +314,7 @@ export class TradingContext {
     await this.account.refreshAccount();
     if (this.account.environmentWarning && this.env === 'live') throw new Error(this.account.environmentWarning);
     if (this.instruments.supported && !this.instruments.loaded) await this.instruments.start();
+    this.dropUnofferedMarkets();
 
     this.setPhase('POSITION_SYNC', 'retrieving positions from broker');
     await this.account.refreshPositions();
@@ -418,7 +442,7 @@ export class TradingContext {
         });
       }
       else {
-        const stale = this.o.config.symbols.filter((s) => this.marketData.freshness(s).stale);
+        const stale = this.marketData.symbols.filter((s) => this.marketData.freshness(s).stale);
         if (stale.length) out.push({ code: 'DATA_STALE', message: `Market data stale: ${stale.join(', ')}` });
       }
       const c = this.calendar.clockStatus();

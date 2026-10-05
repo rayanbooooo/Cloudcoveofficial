@@ -118,6 +118,8 @@ export class FakeOanda {
   rejectNext: string | null = null;
   /** Next MARKET order is canceled at fill time with this reason (e.g. INSUFFICIENT_MARGIN). */
   cancelNext: string | null = null;
+  /** GET /instruments answers 500 (the account's market list is unavailable). */
+  failInstrumentList = false;
   submitBodies: any[] = [];
   private nextId = 1000;
   private server!: http.Server;
@@ -614,6 +616,7 @@ export class FakeOanda {
       }
       if (req.method === 'GET' && sub === '/summary') return send(200, { account: this.summaryJson(), lastTransactionID: String(this.nextId - 1) });
       if (req.method === 'GET' && sub === '/instruments') {
+        if (this.failInstrumentList) return send(500, { errorMessage: 'instrument list unavailable' });
         return send(200, {
           instruments: Object.entries(FAKE_SPECS)
             .filter(([sym]) => this.prices.has(sym))
@@ -664,6 +667,8 @@ export class FakeOanda {
       }
       if (req.method === 'GET' && sub === '/pricing') {
         const list = (q.get('instruments') ?? '').split(',').filter(Boolean);
+        // As with the stream, one market the account is not offered makes the whole request fail.
+        for (const i of list) if (!this.prices.has(i)) return send(400, { errorMessage: `Invalid Instrument ${i}` });
         const out: any = { prices: list.filter((i) => this.prices.has(i)).map((i) => ({ ...this.priceJson(i), type: undefined })), time: iso(this.now()) };
         if (q.get('includeHomeConversions') === 'true') {
           const curs = new Set<string>([this.currency]);
