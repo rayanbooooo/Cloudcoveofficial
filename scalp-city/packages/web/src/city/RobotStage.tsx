@@ -4,9 +4,9 @@ import { Bloom, EffectComposer } from '@react-three/postprocessing';
 import { Component, useCallback, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import * as THREE from 'three';
-import { directionLabel, instrumentName, type OrderView, type SymbolQuoteView, type WorkerView } from '@scalp-city/shared';
+import { directionLabel, instrumentName, sizeUnit, type OrderView, type SymbolQuoteView, type WorkerView } from '@scalp-city/shared';
 import { directionColor } from '../components/panels/Workers';
-import { money, px, qtyStr, unitsStr } from '../lib/format';
+import { money, px, qtyStr } from '../lib/format';
 import { serverNow, useStore } from '../store/store';
 import { DeskRobot, phaseOf, type StagePhase } from './stage/DeskRobot';
 import { drawChartScreen, drawPositionScreen, drawSignalScreen, SCREEN, type ScreenData } from './stage/screens';
@@ -445,7 +445,7 @@ export function robotActivity(w: WorkerView): string {
       return 'Order sent — waiting for the broker to confirm';
     case 'IN_TRADE':
       return p
-        ? `In a ${directionLabel(p.direction, w.config.instrument)} trade · ${unitsStr(Math.abs(p.qty))}${p.stopSource === 'broker' ? ' · stop held by the broker' : p.stopSource === 'server' ? ' · stop held by this server' : ''}`
+        ? `In a ${directionLabel(p.direction, w.config.instrument)} trade · ${qtyStr(Math.abs(p.qty))} ${sizeUnit(p.assetClass, p.qty)}${p.stopSource === 'broker' ? ' · stop held by the broker' : p.stopSource === 'server' ? ' · stop held by this server' : ''}`
         : 'In a trade';
     case 'PROFIT':
       return 'Position closed in profit';
