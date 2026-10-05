@@ -52,6 +52,8 @@ export async function startE2E(opts: { env?: Record<string, string>; fake?: Part
     ALPACA_DATA_URL: fake.url,
     ALPACA_DATA_STREAM_URL: fake.wsUrl,
     ALPACA_OPTIONS_FEED: 'opra',
+    // The classic options workers (QQQ, SPY, IWM); the ETF share workers have their own tests.
+    ALPACA_WORKER_SET: 'options',
     SESSION_SECRET: 'e2e-session-secret-0123456789-abcdefghijklmnop',
     MAX_POSITION_SIZE: '5000',
     MAX_ORDER_NOTIONAL: '5000',

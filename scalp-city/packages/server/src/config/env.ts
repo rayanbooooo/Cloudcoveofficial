@@ -3,6 +3,9 @@ import path from 'node:path';
 import { z } from 'zod';
 import type { OptionsFeed, RiskLimits, StockFeed, TradingEnvironment, Venue } from '@scalp-city/shared';
 
+/** Which Alpaca workers run: ETF stand-ins for gold/Nasdaq/FX/US30, or the original options workers. */
+export type AlpacaWorkerSet = 'etf' | 'options';
+
 /** The only URL a LIVE trading context will ever talk to. */
 export const ALPACA_LIVE_TRADING_URL = 'https://api.alpaca.markets';
 export const ALPACA_PAPER_TRADING_URL = 'https://paper-api.alpaca.markets';
@@ -14,6 +17,10 @@ export const OANDA_LIVE_API_URL = 'https://api-fxtrade.oanda.com';
 export const OANDA_LIVE_STREAM_URL = 'https://stream-fxtrade.oanda.com';
 export const OANDA_PRACTICE_API_URL = 'https://api-fxpractice.oanda.com';
 export const OANDA_PRACTICE_STREAM_URL = 'https://stream-fxpractice.oanda.com';
+
+/** Gold, Nasdaq, the Dow, GBP/USD and the euro — the ETFs Alpaca can trade for them. */
+export const DEFAULT_ETF_SYMBOLS = ['GLD', 'QQQ', 'DIA', 'FXB', 'FXE'];
+export const DEFAULT_OPTION_SYMBOLS = ['QQQ', 'SPY', 'IWM'];
 
 /** Gold, Nasdaq 100, GBP/USD, EUR/JPY and the Dow — OANDA instrument names. */
 export const DEFAULT_OANDA_INSTRUMENTS = ['XAU_USD', 'NAS100_USD', 'GBP_USD', 'EUR_JPY', 'US30_USD'];
@@ -45,6 +52,8 @@ export interface AppConfig {
   port: number;
   /** Brokerage this installation trades through (BROKER). */
   venue: Venue;
+  /** Which Alpaca workers run (ALPACA_WORKER_SET). */
+  alpacaWorkerSet: AlpacaWorkerSet;
   /** Environment the server starts in. */
   tradingEnvironment: TradingEnvironment;
   /** Alpaca key pairs. */
@@ -133,6 +142,11 @@ const EnvSchema = z.object({
     .optional()
     .transform((v) => (v === undefined || v.trim() === '' ? 'alpaca' : v.trim().toLowerCase()))
     .pipe(z.enum(['alpaca', 'oanda'])),
+  ALPACA_WORKER_SET: z
+    .string()
+    .optional()
+    .transform((v) => (v === undefined || v.trim() === '' ? 'etf' : v.trim().toLowerCase()))
+    .pipe(z.enum(['etf', 'options'])),
   OANDA_PRACTICE_TOKEN: optionalString,
   OANDA_PRACTICE_ACCOUNT_ID: optionalString,
   OANDA_LIVE_TOKEN: optionalString,
@@ -379,7 +393,7 @@ export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
       if (!/^[A-Z0-9]{2,12}_[A-Z0-9]{2,12}$/.test(s)) throw new ConfigError(`OANDA_INSTRUMENTS contains an invalid instrument: ${s} (use OANDA names like XAU_USD)`);
     }
   } else {
-    symbols = (e.SYMBOLS ?? 'QQQ,SPY,IWM')
+    symbols = (e.SYMBOLS ?? (e.ALPACA_WORKER_SET === 'options' ? DEFAULT_OPTION_SYMBOLS : DEFAULT_ETF_SYMBOLS).join(','))
       .split(',')
       .map((s) => s.trim().toUpperCase())
       .filter(Boolean);
@@ -403,6 +417,7 @@ export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
     host: e.HOST ?? '127.0.0.1',
     port: e.PORT,
     venue,
+    alpacaWorkerSet: e.ALPACA_WORKER_SET as AlpacaWorkerSet,
     tradingEnvironment: env,
     credentials,
     oanda,

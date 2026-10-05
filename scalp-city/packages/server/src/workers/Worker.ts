@@ -45,6 +45,8 @@ import type { WorkerStatsService } from './WorkerStats.js';
 
 export interface WorkerDeps {
   venue: Venue;
+  /** The workers this deployment runs (null = every worker of the venue). */
+  workerIds?: readonly string[] | null;
   env: 'paper' | 'live';
   marketData: MarketDataService;
   calendar: MarketCalendar;

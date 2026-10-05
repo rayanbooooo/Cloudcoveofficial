@@ -87,7 +87,7 @@ export class WorkerManager {
   ) {}
 
   async load(): Promise<void> {
-    for (const cfg of await this.repo.list(this.deps.venue)) this.workers.set(cfg.id, new Worker(cfg, this.deps));
+    for (const cfg of await this.repo.list(this.deps.venue, this.deps.workerIds ?? undefined)) this.workers.set(cfg.id, new Worker(cfg, this.deps));
   }
 
   async start(): Promise<void> {

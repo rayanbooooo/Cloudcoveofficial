@@ -66,7 +66,10 @@ const baseOptions = {
   minBidSize: 1,
 };
 
-export const WORKERS: WorkerSeed[] = [
+/** Alpaca worker sets: ETF stand-ins for the markets people ask for (default), or the original options workers. */
+export type AlpacaWorkerSet = 'etf' | 'options';
+
+const OPTIONS_WORKERS: WorkerSeed[] = [
   {
     venue: 'alpaca',
     id: 'qqq-og',
@@ -147,8 +150,54 @@ export const WORKERS: WorkerSeed[] = [
     options: { ...baseOptions, maxSpreadAbs: 0.1 },
     sortOrder: 5,
   },
-  ...oandaWorkers(),
 ];
+
+/**
+ * ETF stand-ins (BROKER=alpaca, ALPACA_WORKER_SET=etf): the closest things Alpaca can trade to gold,
+ * the Nasdaq, GBP/USD, EUR/JPY and the Dow. They trade SHARES of the fund, not the spot market, and
+ * only during US stock hours. There is no ETF that tracks EUR/JPY, so FXE (euro vs dollar) stands in.
+ *
+ * Each trade is sized so that a stop-out costs at most `riskPerTrade`, with the stop set from the
+ * market's own range (ATR). The stop is held by this server, not by the broker. Long only until you
+ * turn shorting on per worker. The two currency ETFs trade thinly, so they use 5-minute bars.
+ */
+function etfWorkers(): WorkerSeed[] {
+  const limits = { ...baseLimits, maxTradesPerDay: 3, maxShares: 50, maxPositionNotional: 1000, dailyLossLimit: 30, dailyGoal: 50, riskPerTrade: 10 };
+  const exits = { ...baseExits, stopAtr: 1.5, targetAtr: 2, maxHoldMinutes: 45, flattenBeforeCloseMinutes: 15, cooldownBars: 3 };
+  const seed = (id: string, name: string, symbol: string, timeframe: '1Min' | '5Min', sortOrder: number): WorkerSeed => ({
+    venue: 'alpaca',
+    id,
+    name,
+    symbol,
+    strategyId: 'og-scalper',
+    timeframe,
+    instrument: 'EQUITY',
+    allowShort: false,
+    // Worst fill accepted vs the live price; also capped at a quarter of the stop distance.
+    entrySlippagePct: 0.05,
+    entryTimeoutSec: 20,
+    limits: { ...limits },
+    exits: timeframe === '5Min' ? { ...exits, maxHoldMinutes: 90, cooldownBars: 2 } : { ...exits },
+    options: { ...baseOptions },
+    sortOrder,
+  });
+  return [
+    seed('etf-gold', 'GOLD (GLD)', 'GLD', '1Min', 1),
+    seed('etf-nasdaq', 'NASDAQ (QQQ)', 'QQQ', '1Min', 2),
+    seed('etf-us30', 'US30 (DIA)', 'DIA', '1Min', 3),
+    seed('etf-gbp', 'GBPUSD (FXB)', 'FXB', '5Min', 4),
+    seed('etf-eur', 'EURO (FXE)', 'FXE', '5Min', 5),
+  ];
+}
+
+const ETF_WORKERS = etfWorkers();
+
+export const WORKERS: WorkerSeed[] = [...OPTIONS_WORKERS, ...ETF_WORKERS, ...oandaWorkers()];
+
+/** The workers a deployment runs. Others stay in the database (with their history) but are not loaded. */
+export function activeWorkerIds(venue: Venue, set: AlpacaWorkerSet): string[] {
+  return WORKERS.filter((w) => w.venue === venue && (venue !== 'alpaca' || (set === 'etf' ? ETF_WORKERS : OPTIONS_WORKERS).some((x) => x.id === w.id))).map((w) => w.id);
+}
 
 /**
  * OANDA (BROKER=oanda): gold, Nasdaq 100, GBP/USD, EUR/JPY and the Dow.

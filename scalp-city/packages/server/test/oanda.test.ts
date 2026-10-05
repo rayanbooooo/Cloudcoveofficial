@@ -204,7 +204,10 @@ describe('OANDA configuration', () => {
   it('keeps Alpaca as the default broker, with its own limits and symbols', () => {
     const c = parseConfig({ NODE_ENV: 'test', ALPACA_PAPER_API_KEY: 'k', ALPACA_PAPER_API_SECRET: 's', MAX_POSITION_SIZE: '300' });
     expect(c.venue).toBe('alpaca');
-    expect(c.symbols).toEqual(['QQQ', 'SPY', 'IWM']);
+    expect(c.alpacaWorkerSet).toBe('etf');
+    expect(c.symbols).toEqual(['GLD', 'QQQ', 'DIA', 'FXB', 'FXE']);
+    const classic = parseConfig({ NODE_ENV: 'test', ALPACA_PAPER_API_KEY: 'k', ALPACA_PAPER_API_SECRET: 's', ALPACA_WORKER_SET: 'options' });
+    expect(classic.symbols).toEqual(['QQQ', 'SPY', 'IWM']);
     expect(c.riskDefaults.maxPositionNotional).toBe(300);
     expect(c.riskDefaults.pdtGuard).toBe(true);
   });

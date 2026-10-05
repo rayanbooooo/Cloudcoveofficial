@@ -40,14 +40,14 @@ export class WorkerRepository {
     }
   }
 
-  /** Workers of one venue (broker), in display order. */
-  async list(venue: Venue): Promise<WorkerConfigView[]> {
+  /** Workers of one venue (broker), in display order. `ids` limits them to the active set. */
+  async list(venue: Venue, ids?: readonly string[]): Promise<WorkerConfigView[]> {
     const { rows } = await this.db.query(
       `SELECT w.*, s.name AS strategy_name, s.params AS strategy_params
          FROM workers w JOIN strategies s ON s.id = w.strategy_id
-        WHERE w.venue = $1
+        WHERE w.venue = $1 AND ($2::text[] IS NULL OR w.id = ANY($2::text[]))
         ORDER BY w.sort_order, w.id`,
-      [venue],
+      [venue, ids ? [...ids] : null],
     );
     return rows.map((r: any) => {
       const stored = parse(r.config) as StoredWorkerConfig;

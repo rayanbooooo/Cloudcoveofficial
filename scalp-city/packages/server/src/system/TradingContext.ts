@@ -29,6 +29,7 @@ import { Reconciler } from '../safety/Reconciler.js';
 import type { SettingsStore } from '../settings/SettingsStore.js';
 import { SignalRepository } from '../workers/SignalRepository.js';
 import { WorkerManager } from '../workers/WorkerManager.js';
+import { activeWorkerIds } from '../workers/definitions.js';
 import { WorkerRepository } from '../workers/WorkerRepository.js';
 import { WorkerStatsService } from '../workers/WorkerStats.js';
 import { Alerts, Timeline } from './Timeline.js';
@@ -214,6 +215,7 @@ export class TradingContext {
     this.workers = new WorkerManager(
       {
         venue: this.venue,
+        workerIds: activeWorkerIds(this.venue, o.config.alpacaWorkerSet),
         env: o.env,
         marketData: this.marketData,
         calendar: this.calendar,
