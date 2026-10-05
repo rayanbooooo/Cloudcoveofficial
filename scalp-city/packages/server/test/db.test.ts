@@ -4,6 +4,7 @@ import { ManualClock } from '../src/core/clock.js';
 import { createTestLogger } from '../src/core/logger.js';
 import type { Db } from '../src/db/db.js';
 import { MIGRATIONS, migrate, splitSql } from '../src/db/migrations.js';
+import { activeWorkerIds } from '../src/workers/definitions.js';
 import { WorkerRepository } from '../src/workers/WorkerRepository.js';
 import { createEmptyPgliteDb, createPgliteDb } from './support/pglite.js';
 
@@ -44,6 +45,25 @@ describe('migrations', () => {
     expect(w.rows.map((r) => r.id)).toEqual(['oanda-gold', 'oanda-nas100', 'oanda-gbpusd', 'oanda-eurjpy', 'oanda-us30']);
     expect(new Set(w.rows.map((r) => r.instrument))).toEqual(new Set(['CFD']));
     await old.close();
+  });
+
+  it('loads only the active worker set, and leaves the other set in the database', async () => {
+    const repo = new WorkerRepository(db);
+    await repo.seed();
+    const ids = async (set: 'etf' | 'options') => (await repo.list('alpaca', activeWorkerIds('alpaca', set))).map((w) => w.id);
+    expect(await ids('etf')).toEqual(['etf-gold', 'etf-nasdaq', 'etf-us30', 'etf-gbp', 'etf-eur']);
+    expect(await ids('options')).toEqual(['qqq-og', 'qqq', 'qqq-trend', 'spy', 'iwm']);
+    // Nothing is deleted: switching the set back finds the old workers (and their history) as they were.
+    expect((await repo.list('alpaca')).length).toBe(10);
+    expect((await repo.list('oanda', activeWorkerIds('oanda', 'etf'))).length).toBe(5);
+    const etf = (await repo.list('alpaca', activeWorkerIds('alpaca', 'etf'))).map((w) => [w.symbol, w.instrument, w.timeframe, w.allowShort]);
+    expect(etf).toEqual([
+      ['GLD', 'EQUITY', '1Min', false],
+      ['QQQ', 'EQUITY', '1Min', false],
+      ['DIA', 'EQUITY', '1Min', false],
+      ['FXB', 'EQUITY', '5Min', false],
+      ['FXE', 'EQUITY', '5Min', false],
+    ]);
   });
 
   it('splits SQL without breaking dollar-quoted bodies', () => {
