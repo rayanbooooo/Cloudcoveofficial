@@ -50,6 +50,8 @@ export function priceStr(p: number, isOption: boolean): string {
  */
 export class AlpacaBrokerAdapter implements BrokerAdapter {
   readonly name = 'ALPACA' as const;
+  readonly venue = 'alpaca' as const;
+  readonly calendarSource = 'exchange' as const;
   readonly env: TradingEnvironment;
   readonly endpoint: string;
   private readonly http: AlpacaHttp;
@@ -71,6 +73,14 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
 
   async getAccount(): Promise<BrokerAccount> {
     return mapAccount(await this.http.get('/v2/account'));
+  }
+
+  /** Alpaca paper account numbers start with "PA"; live ones don't. */
+  environmentWarning(acct: BrokerAccount): string | null {
+    const looksPaper = acct.accountNumber.toUpperCase().startsWith('PA');
+    if (this.env === 'live' && looksPaper) return 'LIVE environment is connected to what looks like a PAPER account (account number starts with PA).';
+    if (this.env === 'paper' && !looksPaper && acct.accountNumber) return 'PAPER environment is connected to an account whose number does not look like a paper account.';
+    return null;
   }
 
   async getPositions(): Promise<BrokerPosition[]> {

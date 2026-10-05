@@ -32,6 +32,8 @@ export interface Quote {
   askSize: number;
   bidExchange: string | null;
   askExchange: string | null;
+  /** OANDA: whether this price can be traded on (false while an instrument is halted or closed). */
+  tradeable?: boolean;
 }
 
 export interface Bar {
@@ -85,6 +87,8 @@ export interface SymbolQuoteView {
   bid: number | null;
   ask: number | null;
   quoteAt: number | null;
+  /** OANDA: broker says the instrument is tradeable right now (null when not reported). */
+  tradeable: boolean | null;
   /** Most recent event timestamp of any kind (exchange time). */
   lastEventAt: number | null;
   /** serverNow - lastEventAt at the moment the view was produced. */

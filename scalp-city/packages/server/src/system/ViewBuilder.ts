@@ -1,6 +1,7 @@
 import { DateTime } from 'luxon';
 import {
   atr as atrSeries,
+  brokerNameOf,
   ema as emaSeries,
   maskAccountNumber,
   parseOccSymbol,
@@ -41,18 +42,21 @@ export class ViewBuilder {
     private readonly clock: Clock,
   ) {}
 
-  /** Refresh DB-derived figures (realized today per symbol, paper round trips). */
+  /** Refresh DB-derived figures (realized today per symbol, paper round trips) for the configured broker. */
   async refresh(env: TradingEnvironment): Promise<void> {
+    const venue = this.config.venue;
     try {
       const midnight = DateTime.fromMillis(this.clock.now(), { zone: 'America/New_York' }).startOf('day').toMillis();
       const r = await this.db.query<{ symbol: string; realized: number }>(
         `SELECT t.symbol, COALESCE(SUM(e.realized_pnl),0) AS realized FROM trade_events e JOIN trades t ON t.id = e.trade_id
-          WHERE t.env = $1 AND e.kind = 'EXIT_FILL' AND e.occurred_at >= $2 GROUP BY t.symbol`,
-        [env, iso(midnight)],
+          WHERE t.venue = $1 AND t.env = $2 AND e.kind IN ('EXIT_FILL', 'ENTRY_FILL') AND e.occurred_at >= $3 GROUP BY t.symbol`,
+        [venue, env, iso(midnight)],
       );
       this.realizedBySymbol = new Map(r.rows.map((x) => [x.symbol, n(x.realized) ?? 0]));
+      // The LIVE checklist needs a completed round trip on THIS broker's paper (practice) account.
       const p = await this.db.query<{ c: number }>(
-        `SELECT COUNT(*) AS c FROM trades WHERE env = 'paper' AND status = 'CLOSED' AND realized_pnl IS NOT NULL AND qty_closed > 0 AND qty_opened > 0`,
+        `SELECT COUNT(*) AS c FROM trades WHERE venue = $1 AND env = 'paper' AND status = 'CLOSED' AND realized_pnl IS NOT NULL AND qty_closed > 0 AND qty_opened > 0`,
+        [venue],
       );
       this.paperRoundTrips = n(p.rows[0]?.c) ?? 0;
       this.dbOk = true;
@@ -79,7 +83,8 @@ export class ViewBuilder {
     const unrealizedIntraday = sum((p) => p.unrealizedIntradayPl);
     return {
       available: a !== null,
-      broker: 'ALPACA',
+      broker: brokerNameOf(this.config.venue),
+      venue: this.config.venue,
       env: ctx.env,
       accountNumberMasked: maskAccountNumber(a?.accountNumber),
       status: a?.status ?? null,
@@ -99,7 +104,11 @@ export class ViewBuilder {
       maintenanceMargin: a?.maintenanceMargin ?? null,
       multiplier: a?.multiplier ?? null,
       dayPnl,
-      dayPnlPct: dayPnl !== null && a?.lastEquity ? (dayPnl / a.lastEquity) * 100 : null,
+      dayPnlPct: dayPnl === null ? null : a?.lastEquity ? (dayPnl / a.lastEquity) * 100 : a?.equity && a.equity - dayPnl > 0 ? (dayPnl / (a.equity - dayPnl)) * 100 : null,
+      dayPnlNote: a?.dayPnlNote ?? null,
+      marginUsed: a?.marginUsed ?? null,
+      marginAvailable: a?.marginAvailable ?? null,
+      marginCloseoutPct: a?.marginCloseoutPercent === null || a?.marginCloseoutPercent === undefined ? null : a.marginCloseoutPercent * 100,
       unrealizedPnl: unrealized,
       unrealizedIntradayPnl: unrealizedIntraday,
       realizedPnlDerived: dayPnl !== null && unrealizedIntraday !== null ? dayPnl - unrealizedIntraday : null,
@@ -119,13 +128,22 @@ export class ViewBuilder {
     if (!ctx.configured) return [];
     return ctx.account.positions.map((p) => {
       const isOption = p.assetClass === 'us_option';
-      const mult = isOption ? 100 : 1;
+      const isCfd = p.assetClass === 'cfd';
+      const cfdMult = isCfd ? (ctx.instruments.homeFactor(p.symbol) ?? p.multiplier ?? null) : null;
+      const mult = isOption ? 100 : isCfd ? (cfdMult ?? 1) : 1;
       let mark: number | null = null;
       let markSource: PositionView['markSource'] = null;
       if (isOption) {
         const q = ctx.marketData.optionQuote(p.symbol);
         if (q && !q.stale && q.mid !== null) {
           mark = q.mid;
+          markSource = 'quote_mid';
+        }
+      } else if (isCfd) {
+        const st = ctx.marketData.state(p.symbol);
+        const f = ctx.marketData.freshness(p.symbol);
+        if (st && !f.stale && st.bid !== null && st.ask !== null && cfdMult !== null) {
+          mark = (st.bid + st.ask) / 2;
           markSource = 'quote_mid';
         }
       } else {
@@ -141,7 +159,13 @@ export class ViewBuilder {
         markSource = 'broker';
       }
       const signedQty = p.side === 'long' ? p.qty : -p.qty;
-      const unrealized = markSource === 'broker' || mark === null ? p.unrealizedPl : (mark - p.avgEntryPrice) * signedQty * mult;
+      // CFDs are valued at the price a close would actually get (bid for longs, ask for shorts), like OANDA does.
+      let pnlPx = mark;
+      if (isCfd && markSource === 'quote_mid') {
+        const st = ctx.marketData.state(p.symbol);
+        pnlPx = (p.side === 'long' ? st?.bid : st?.ask) ?? mark;
+      }
+      const unrealized = markSource === 'broker' || pnlPx === null ? p.unrealizedPl : (pnlPx - p.avgEntryPrice) * signedQty * mult;
       const occ = parseOccSymbol(p.symbol);
       const lp = ctx.ledger.get(p.symbol);
       return {
@@ -173,7 +197,7 @@ export class ViewBuilder {
     const now = this.clock.now();
     for (const symbol of this.config.symbols) {
       if (!ctx.configured) {
-        out[symbol] = { symbol, last: null, lastTradeAt: null, bid: null, ask: null, quoteAt: null, lastEventAt: null, ageMs: null, stale: true, prevClose: null, change: null, changePct: null, sessionVolume: null, vwap: null, ema50: null, atr: null };
+        out[symbol] = { symbol, last: null, lastTradeAt: null, bid: null, ask: null, quoteAt: null, tradeable: null, lastEventAt: null, ageMs: null, stale: true, prevClose: null, change: null, changePct: null, sessionVolume: null, vwap: null, ema50: null, atr: null };
         continue;
       }
       const cached = this.quoteCache.get(symbol);
@@ -198,6 +222,7 @@ export class ViewBuilder {
         bid: st.bid,
         ask: st.ask,
         quoteAt: st.quoteAt,
+        tradeable: st.tradeable,
         lastEventAt: st.lastEventAt,
         ageMs: f.ageMs,
         stale: f.stale,
@@ -233,6 +258,7 @@ export class ViewBuilder {
       maxTradesPerDay: limits.maxTradesPerDay,
       buyingPower: a?.buyingPower ?? null,
       optionsBuyingPower: a?.optionsBuyingPower ?? null,
+      marginAvailable: a?.marginAvailable ?? null,
       dataLatencyMs: latencies.length ? Math.max(...latencies) : null,
       brokerStatus,
       entriesAllowed: reasons.length === 0,
@@ -277,14 +303,15 @@ export class ViewBuilder {
 
   system(ctx: TradingContext, availableEnvs: TradingEnvironment[]): SystemView {
     const configured = ctx.configured;
-    const stockFeed = stockFeedLabel(this.config.stockFeed);
+    const feed = this.config.venue === 'oanda' ? 'oanda' : this.config.stockFeed;
+    const stockFeed = stockFeedLabel(feed);
     const optFeed = optionsFeedLabel(this.config.optionsFeed);
     const md = configured
       ? ctx.marketData.status()
       : {
           stock: UNAVAILABLE_STREAM,
           options: UNAVAILABLE_STREAM,
-          stockFeed: this.config.stockFeed,
+          stockFeed: feed,
           stockFeedLabel: stockFeed.label,
           stockRealtime: stockFeed.realtime,
           stockPartialVolume: stockFeed.partialVolume,
@@ -293,6 +320,8 @@ export class ViewBuilder {
           optionsRealtimeNbbo: optFeed.realtimeNbbo,
           optionsAutotradeAllowed: false,
           optionsBlockReason: 'not configured',
+          tickVolume: stockFeed.tickVolume,
+          priceBasis: stockFeed.priceBasis,
           maxDataAgeMs: this.config.thresholds.maxDataAgeMs,
           symbols: Object.fromEntries(this.config.symbols.map((s) => [s, { lastEventAt: null, ageMs: null, stale: true }])),
         };
@@ -301,10 +330,19 @@ export class ViewBuilder {
     return {
       serverTime: this.clock.now(),
       env: ctx.env,
+      venue: this.config.venue,
       availableEnvs,
       live: { serverLockOpen: ctx.liveGate.serverLockOpen, armed: ctx.liveGate.armed, armedAt: ctx.liveGate.armedAt, armedBy: ctx.liveGate.armedBy },
       endpoints: {
-        trading: configured ? ctx.broker.endpoint : ctx.env === 'live' ? this.config.endpoints.liveTrading : this.config.endpoints.paperTrading,
+        trading: configured
+          ? ctx.broker.endpoint
+          : this.config.venue === 'oanda'
+            ? ctx.env === 'live'
+              ? this.config.oanda.endpoints.liveApi
+              : this.config.oanda.endpoints.practiceApi
+            : ctx.env === 'live'
+              ? this.config.endpoints.liveTrading
+              : this.config.endpoints.paperTrading,
         nonStandard: this.config.nonStandardEndpoints.length > 0,
       },
       phase: ctx.phase,
@@ -317,7 +355,7 @@ export class ViewBuilder {
         haltReasons: reasons,
       },
       broker: {
-        name: 'ALPACA',
+        name: brokerNameOf(this.config.venue),
         status: brokerStatus.status,
         lastOkAt: configured ? ctx.account.lastOkAt : null,
         lastError: brokerStatus.detail,
@@ -363,7 +401,14 @@ export class ViewBuilder {
       marketDataConnected: ok(md.stock.state === 'CONNECTED' && md.stockRealtime, md.stockRealtime ? `${md.stockFeedLabel} · ${md.stock.state}` : 'feed is delayed — live trading needs real-time data'),
       marketDataFresh: ok(!marketOpen || stale.length === 0, marketOpen ? (stale.length ? `stale: ${stale.join(', ')}` : 'all symbols live') : 'market closed — freshness enforced on every order'),
       optionsData: ok(!usesOptions || md.optionsAutotradeAllowed, !usesOptions ? 'no worker trades options' : (md.optionsBlockReason ?? md.optionsFeedLabel)),
-      riskLimits: ok(limitsOk, limitsOk ? `daily loss −$${limits.maxDailyLoss}, ${limits.maxConcurrentPositions} positions, ${limits.maxContracts} contracts` : 'a risk limit is invalid'),
+      riskLimits: ok(
+        limitsOk,
+        !limitsOk
+          ? 'a risk limit is invalid'
+          : this.config.venue === 'oanda'
+            ? `daily loss −${limits.maxDailyLoss}, ${limits.maxConcurrentPositions} position(s), max ${limits.maxRiskPerTrade} at risk per trade, max position ${limits.maxPositionNotional} (account currency)`
+            : `daily loss −$${limits.maxDailyLoss}, ${limits.maxConcurrentPositions} positions, ${limits.maxContracts} contracts`,
+      ),
       killSwitch: ok(!ctx.controls.killSwitch.active, ctx.controls.killSwitch.active ? 'kill switch is ACTIVE — release it first' : 'armed and available'),
       dailyLoss: ok(dayPnl !== null && dayPnl > -limits.maxDailyLoss, dayPnl === null ? 'day P&L unavailable' : `day P&L ${dayPnl.toFixed(2)} vs −${limits.maxDailyLoss}`),
       reconciliation: ok(recon.status === 'RECONCILED', recon.status),

@@ -7,6 +7,19 @@
 
 export type TradingEnvironment = 'paper' | 'live';
 
+/**
+ * Which brokerage this installation trades through. Alpaca: US stocks and
+ * options. OANDA: spot FX, metals and index CFDs (gold, NAS100, GBP/USD …).
+ * Every order, position and trade is stored under its venue, so switching
+ * brokers never mixes one broker's records with the other's.
+ */
+export type Venue = 'alpaca' | 'oanda';
+export type BrokerName = 'ALPACA' | 'OANDA';
+
+export function brokerNameOf(venue: Venue): BrokerName {
+  return venue === 'oanda' ? 'OANDA' : 'ALPACA';
+}
+
 /** Connection lifecycle for every long-lived stream. */
 export type ConnectionState = 'CONNECTING' | 'CONNECTED' | 'RECONNECTING' | 'DISCONNECTED' | 'ERROR';
 
@@ -58,16 +71,26 @@ export type OrderSide = 'buy' | 'sell';
 export type OrderType = 'market' | 'limit' | 'stop' | 'stop_limit';
 export type TimeInForce = 'day' | 'gtc' | 'ioc' | 'fok' | 'opg' | 'cls';
 export type PositionIntent = 'buy_to_open' | 'buy_to_close' | 'sell_to_open' | 'sell_to_close';
-export type AssetClass = 'us_equity' | 'us_option';
+/**
+ * `cfd`: an OTC instrument traded in units on margin, long or short
+ * (OANDA spot FX, metals and index CFDs). P&L is in the account currency.
+ */
+export type AssetClass = 'us_equity' | 'us_option' | 'cfd';
 
-/** Order types the platform will present, per asset class (Alpaca Trading API). */
+/** Order types the platform will present, per asset class. */
 export const SUPPORTED_ORDER_TYPES: Record<AssetClass, readonly OrderType[]> = {
   us_equity: ['market', 'limit', 'stop', 'stop_limit'],
   us_option: ['market', 'limit', 'stop', 'stop_limit'],
+  cfd: ['market', 'limit'],
 };
 
-/** Why an order exists. Drives which risk rules apply. */
-export type OrderPurpose = 'ENTRY' | 'EXIT' | 'FLATTEN' | 'MANUAL_OPEN' | 'MANUAL_CLOSE';
+/**
+ * Why an order exists. Drives which risk rules apply. PROTECTIVE_STOP is a
+ * broker-side stop loss attached to a filled entry (the entry passed risk with
+ * it); it lives at the broker so a position stays protected even if this
+ * server is down.
+ */
+export type OrderPurpose = 'ENTRY' | 'EXIT' | 'FLATTEN' | 'MANUAL_OPEN' | 'MANUAL_CLOSE' | 'PROTECTIVE_STOP';
 
 export type OrderSource = 'WORKER' | 'MANUAL' | 'FLATTEN';
 
@@ -95,7 +118,8 @@ export const TOWER_STATES = [
 ] as const;
 export type TowerState = (typeof TOWER_STATES)[number];
 
-export type Instrument = 'OPTIONS' | 'EQUITY';
+/** What a worker trades: option contracts, the shares themselves, or (OANDA) the CFD/FX instrument. */
+export type Instrument = 'OPTIONS' | 'EQUITY' | 'CFD';
 
 export const TIMEFRAMES = ['1Min', '5Min', '15Min'] as const;
 export type Timeframe = (typeof TIMEFRAMES)[number];
@@ -129,13 +153,23 @@ export type HealthStatus = 'ok' | 'warn' | 'error' | 'off';
 
 export type Severity = 'info' | 'success' | 'warn' | 'error';
 
-/** Stock feeds Alpaca offers for streaming. */
-export type StockFeed = 'iex' | 'sip' | 'delayed_sip';
+/**
+ * Primary price feed. Alpaca: stock feeds. `oanda`: OANDA's own streaming
+ * bid/ask prices (no exchange trades exist for OTC FX/CFDs; volume is the
+ * number of price updates, i.e. tick volume).
+ */
+export type StockFeed = 'iex' | 'sip' | 'delayed_sip' | 'oanda';
 export type OptionsFeed = 'indicative' | 'opra';
 
-/** Mask an account number for display: "••••4821". Never show it in full. */
+/**
+ * Mask an account number for display: "••••4821". Never show it in full.
+ * OANDA account ids ("101-004-12345678-001") keep the sub-account suffix,
+ * which is otherwise identical for most users: "••••5678-001".
+ */
 export function maskAccountNumber(accountNumber: string | null | undefined): string | null {
   if (!accountNumber) return null;
+  const oanda = /^\d{3}-\d{3}-(\d+)-(\d{3})$/.exec(accountNumber);
+  if (oanda) return `••••${oanda[1]!.slice(-4)}-${oanda[2]}`;
   const tail = accountNumber.slice(-4);
   return `••••${tail}`;
 }

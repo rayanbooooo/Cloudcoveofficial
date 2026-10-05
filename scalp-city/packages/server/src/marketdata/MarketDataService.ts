@@ -37,6 +37,8 @@ export interface SymbolLiveState {
   bid: number | null;
   ask: number | null;
   quoteAt: number | null;
+  /** OANDA: broker's tradeable flag on the latest price (null when the feed doesn't say). */
+  tradeable: boolean | null;
   /** Latest exchange timestamp of any event for this symbol. */
   lastEventAt: number | null;
   prevClose: number | null;
@@ -72,14 +74,16 @@ export interface MarketDataServiceOptions {
   muteTimeoutMs?: number;
 }
 
-export function stockFeedLabel(feed: StockFeed): { label: string; realtime: boolean; partialVolume: boolean } {
+export function stockFeedLabel(feed: StockFeed): { label: string; realtime: boolean; partialVolume: boolean; tickVolume: boolean; priceBasis: 'trades' | 'mid' } {
   switch (feed) {
     case 'sip':
-      return { label: 'LIVE · SIP', realtime: true, partialVolume: false };
+      return { label: 'LIVE · SIP', realtime: true, partialVolume: false, tickVolume: false, priceBasis: 'trades' };
     case 'iex':
-      return { label: 'LIVE · IEX ONLY', realtime: true, partialVolume: true };
+      return { label: 'LIVE · IEX ONLY', realtime: true, partialVolume: true, tickVolume: false, priceBasis: 'trades' };
     case 'delayed_sip':
-      return { label: 'DELAYED 15 MIN', realtime: false, partialVolume: false };
+      return { label: 'DELAYED 15 MIN', realtime: false, partialVolume: false, tickVolume: false, priceBasis: 'trades' };
+    case 'oanda':
+      return { label: 'LIVE · OANDA PRICES', realtime: true, partialVolume: false, tickVolume: true, priceBasis: 'mid' };
   }
 }
 
@@ -121,7 +125,7 @@ export class MarketDataService {
     this.optionsFeed = provider.optionsFeed;
     for (const s of opts.symbols) {
       this.stores.set(s, new BarStore(s));
-      this.live.set(s, { symbol: s, last: null, lastTradeAt: null, bid: null, ask: null, quoteAt: null, lastEventAt: null, prevClose: null });
+      this.live.set(s, { symbol: s, last: null, lastTradeAt: null, bid: null, ask: null, quoteAt: null, tradeable: null, lastEventAt: null, prevClose: null });
     }
   }
 
@@ -177,6 +181,7 @@ export class MarketDataService {
           st.bid = e.bid;
           st.ask = e.ask;
           st.quoteAt = e.t;
+          if (e.tradeable !== undefined) st.tradeable = e.tradeable;
         }
         st.lastEventAt = Math.max(st.lastEventAt ?? 0, e.t);
         this.bus.emit('MARKET_TICK', e);
@@ -321,6 +326,7 @@ export class MarketDataService {
           st.bid = s.latestQuote.bid;
           st.ask = s.latestQuote.ask;
           st.quoteAt = s.latestQuote.t;
+          if (s.latestQuote.tradeable !== undefined) st.tradeable = s.latestQuote.tradeable;
         }
         const latest = Math.max(st.lastTradeAt ?? 0, st.quoteAt ?? 0);
         if (latest > 0) st.lastEventAt = Math.max(st.lastEventAt ?? 0, latest);
@@ -448,6 +454,8 @@ export class MarketDataService {
       optionsRealtimeNbbo: opt.realtimeNbbo,
       optionsAutotradeAllowed: policy.allowed,
       optionsBlockReason: policy.allowed ? null : policy.reason,
+      tickVolume: stock.tickVolume,
+      priceBasis: stock.priceBasis,
       maxDataAgeMs: this.opts.maxDataAgeMs,
       symbols,
     };

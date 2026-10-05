@@ -92,6 +92,10 @@ export class Reconciler {
     for (const bp of this.account.positions) {
       if (inFlight.has(bp.symbol)) continue;
       const brokerQty = bp.side === 'long' ? bp.qty : -bp.qty;
+      if (bp.hedged && watched.has(relatedUnderlying(bp.symbol))) {
+        found.push({ symbol: bp.symbol, local: this.ledger.get(bp.symbol)?.qty ?? 0, broker: brokerQty, kind: 'QTY_MISMATCH', detail: `${bp.symbol} has long and short trades open at once (hedged) — Scalp City only manages net positions; close one side at the broker` });
+        continue;
+      }
       const lp = this.ledger.get(bp.symbol);
       if (!lp) {
         if (!watched.has(relatedUnderlying(bp.symbol))) {
@@ -116,6 +120,8 @@ export class Reconciler {
     }
     for (const bo of this.account.openOrders) {
       if (this.orders.byClientOrderId(bo.clientOrderId)) continue;
+      // A broker-side stop for one of our entries that the stream hasn't reported yet: adopt it.
+      if (await this.orders.adoptProtectiveStop(bo).catch(() => null)) continue;
       if (!watched.has(relatedUnderlying(bo.symbol))) continue;
       found.push({ symbol: bo.symbol, local: 0, broker: bo.qty ?? 0, kind: 'UNEXPECTED_ORDER', detail: `open ${bo.side} order for ${bo.qty} ${bo.symbol} not placed by Scalp City` });
     }

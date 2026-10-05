@@ -3,9 +3,9 @@ import { AuditLog } from '../src/audit/AuditLog.js';
 import { ManualClock } from '../src/core/clock.js';
 import { createTestLogger } from '../src/core/logger.js';
 import type { Db } from '../src/db/db.js';
-import { migrate, splitSql } from '../src/db/migrations.js';
+import { MIGRATIONS, migrate, splitSql } from '../src/db/migrations.js';
 import { WorkerRepository } from '../src/workers/WorkerRepository.js';
-import { createPgliteDb } from './support/pglite.js';
+import { createEmptyPgliteDb, createPgliteDb } from './support/pglite.js';
 
 let db: Db;
 
@@ -20,8 +20,30 @@ afterAll(async () => {
 describe('migrations', () => {
   it('applies cleanly and is idempotent', async () => {
     expect(await migrate(db)).toBe(0);
-    const { rows } = await db.query<{ version: number }>('SELECT version FROM schema_migrations');
-    expect(rows.map((r) => Number(r.version))).toEqual([1]);
+    const { rows } = await db.query<{ version: number }>('SELECT version FROM schema_migrations ORDER BY version');
+    expect(rows.map((r) => Number(r.version))).toEqual(MIGRATIONS.map((m) => m.version));
+  });
+
+  it('upgrades an Alpaca-era database: old rows become venue "alpaca", CFD workers allowed', async () => {
+    const old = await createEmptyPgliteDb();
+    // Apply only the original schema, write a pre-upgrade row, then upgrade.
+    const split = splitSql;
+    await old.exec(`CREATE TABLE IF NOT EXISTS schema_migrations (version integer PRIMARY KEY, name text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now())`);
+    await old.tx(async (q) => {
+      for (const stmt of split(MIGRATIONS[0]!.sql)) await q.query(stmt);
+      await q.query('INSERT INTO schema_migrations(version, name) VALUES (1, $1)', [MIGRATIONS[0]!.name]);
+    });
+    await old.query(`INSERT INTO positions(env, symbol, asset_class, qty, avg_price, multiplier, opened_at, updated_at) VALUES ('paper','QQQ','us_equity',1,1,1,now(),now())`);
+    expect(await migrate(old)).toBe(MIGRATIONS.length - 1);
+    const { rows } = await old.query<{ venue: string }>('SELECT venue FROM positions');
+    expect(rows[0]!.venue).toBe('alpaca');
+    // Same symbol may now exist under another broker without colliding.
+    await old.query(`INSERT INTO positions(env, symbol, asset_class, qty, avg_price, multiplier, opened_at, updated_at, venue) VALUES ('paper','QQQ','cfd',1,1,1,now(),now(),'oanda')`);
+    await new WorkerRepository(old).seed();
+    const w = await old.query<{ id: string; instrument: string }>(`SELECT id, instrument FROM workers WHERE venue = 'oanda' ORDER BY sort_order`);
+    expect(w.rows.map((r) => r.id)).toEqual(['oanda-gold', 'oanda-nas100', 'oanda-gbpusd', 'oanda-eurjpy', 'oanda-us30']);
+    expect(new Set(w.rows.map((r) => r.instrument))).toEqual(new Set(['CFD']));
+    await old.close();
   });
 
   it('splits SQL without breaking dollar-quoted bodies', () => {

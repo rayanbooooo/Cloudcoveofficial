@@ -3,7 +3,9 @@ import {
   advanceSignal,
   aggregateBars,
   computeIndicatorSnapshot,
+  directionLabel,
   evaluateSignal,
+  instrumentName,
   parseOccSymbol,
   timeframeMinutes,
   type Bar,
@@ -15,20 +17,25 @@ import {
   type SignalView,
   type TowerState,
   type WorkerConfigView,
+  type WorkerMarketView,
   type WorkerPositionView,
   type WorkerView,
+  type Venue,
 } from '@scalp-city/shared';
+import type { BrokerAccount, BrokerInstrument } from '../broker/types.js';
 import type { Clock } from '../core/clock.js';
+import { formatMoney, formatQty } from '../core/format.js';
 import type { EventBus } from '../core/eventBus.js';
 import type { Logger } from '../core/logger.js';
 import { iso, type Db } from '../db/db.js';
+import { floorUnits, roundPrice, type InstrumentCatalog } from '../market/InstrumentCatalog.js';
 import type { MarketCalendar } from '../market/MarketCalendar.js';
 import { nyDate } from '../market/MarketCalendar.js';
 import type { MarketDataService } from '../marketdata/MarketDataService.js';
 import type { ContractSelector } from '../options/ContractSelector.js';
 import type { OrderEngine } from '../orders/OrderEngine.js';
 import { isTerminal } from '../orders/stateMachine.js';
-import type { OrderRecord, OrderRequest } from '../orders/types.js';
+import type { ExitPlan, OrderRecord, OrderRequest } from '../orders/types.js';
 import type { PositionLedger } from '../positions/PositionLedger.js';
 import type { LedgerPosition } from '../positions/types.js';
 import type { Controls } from '../safety/Controls.js';
@@ -37,6 +44,7 @@ import type { SignalRepository } from './SignalRepository.js';
 import type { WorkerStatsService } from './WorkerStats.js';
 
 export interface WorkerDeps {
+  venue: Venue;
   env: 'paper' | 'live';
   marketData: MarketDataService;
   calendar: MarketCalendar;
@@ -57,7 +65,14 @@ export interface WorkerDeps {
   maxPositionNotional: () => number;
   maxContracts: () => number;
   maxShares: () => number;
+  /** CFD workers. */
+  instruments: InstrumentCatalog;
+  account: () => BrokerAccount | null;
+  maxOrderNotional: () => number;
+  maxRiskPerTrade: () => number;
 }
+
+type EntryRequest = OrderRequest & { signalBarCloseAt: number; referencePrice: number | null };
 
 /** Round to the instrument's tick (penny increments for options and stocks ≥ $1). */
 export function roundToTick(price: number, isOption: boolean, direction: 'up' | 'down'): number {
@@ -232,6 +247,90 @@ export class Worker {
     }
   }
 
+  private money(v: number): string {
+    return formatMoney(v, this.d.account()?.currency ?? 'USD');
+  }
+
+  /** Stop/target distances for a CFD entry from the latest confirmed ATR (null until ATR is warm). */
+  exitPlan(spread: number | null = null): ExitPlan | null {
+    const atr = this.lastSnapshot?.atr ?? null;
+    if (atr === null || !(atr > 0)) return null;
+    const x = this.config.exits;
+    // Never closer than a few spreads: a stop inside the noise just pays the spread repeatedly.
+    const floor = spread !== null && spread > 0 ? spread * 3 : 0;
+    return { stopDistance: Math.max(atr * x.stopAtr, floor), targetDistance: Math.max(atr * x.targetAtr, floor), atr };
+  }
+
+  /**
+   * CFD size: risk-based (loss at the stop ≤ riskPerTrade), then capped by the
+   * notional limits and the broker's maximum, rounded DOWN to the unit step.
+   */
+  private cfdSize(spec: BrokerInstrument, price: number, stopDistance: number, factor: number): { units: number | null; note: string | null } {
+    const L = this.config.limits;
+    const risk = Math.min(L.riskPerTrade, this.d.maxRiskPerTrade());
+    const notionalCap = Math.min(L.maxPositionNotional, this.d.maxPositionNotional(), this.d.maxOrderNotional());
+    const byRisk = risk / (stopDistance * factor);
+    const byNotional = notionalCap / (price * factor);
+    const units = floorUnits(Math.min(byRisk, byNotional, spec.maxOrderUnits ?? Infinity), spec.unitsPrecision);
+    if (!(units >= spec.minUnits - 1e-9)) {
+      const minNotional = spec.minUnits * price * factor;
+      const minRisk = spec.minUnits * stopDistance * factor;
+      const why = minRisk > risk ? `${this.money(minRisk)} at the stop vs ${this.money(risk)} allowed` : `${this.money(minNotional)} notional vs ${this.money(notionalCap)} allowed`;
+      return { units: null, note: `size: the minimum ${formatQty(spec.minUnits)} unit${spec.minUnits === 1 ? '' : 's'} is too big — ${why}` };
+    }
+    return { units, note: null };
+  }
+
+  /** Build a CFD entry, or explain why there can't be one. */
+  private async cfdEntry(direction: SignalDirection, common: Omit<EntryRequest, 'symbol' | 'underlying' | 'assetClass' | 'side' | 'positionIntent' | 'type' | 'qty' | 'limitPrice' | 'meta' | 'referencePrice'>, signalMeta: { charge: number; conditions: unknown[] }): Promise<EntryRequest | string> {
+    const sym = this.config.symbol;
+    await this.d.instruments.ensure();
+    const spec = this.d.instruments.get(sym);
+    if (!spec) return `${sym} is not offered to this account`;
+    const st = this.d.marketData.state(sym);
+    if (!st || st.bid === null || st.ask === null || !(st.bid > 0) || !(st.ask >= st.bid)) return 'no live bid/ask';
+    if (st.tradeable === false) return `${sym} is not tradeable right now`;
+    const side = direction === 'CALL' ? 'buy' : 'sell';
+    if (side === 'sell' && !this.config.allowShort) return 'SHORT signal — short entries disabled for this worker';
+    const spread = st.ask - st.bid;
+    const plan = this.exitPlan(spread);
+    if (!plan) return 'ATR not ready — cannot place a stop yet';
+    if (spread > plan.stopDistance * 0.35) return `spread ${spread.toFixed(spec.displayPrecision)} is too wide for a ${plan.stopDistance.toFixed(spec.displayPrecision)} stop`;
+    const factor = this.d.instruments.homeFactor(sym);
+    if (factor === null) return 'currency conversion rate unavailable';
+    const ref = side === 'buy' ? st.ask : st.bid;
+    // Worst acceptable fill: the slippage allowance, but never more than a quarter of the stop.
+    const slip = Math.min((ref * this.config.entrySlippagePct) / 100, plan.stopDistance * 0.25);
+    const bound = roundPrice(side === 'buy' ? ref + slip : ref - slip, spec.displayPrecision, side === 'buy' ? 'up' : 'down');
+    const stopPrice = roundPrice(side === 'buy' ? ref - plan.stopDistance : ref + plan.stopDistance, spec.displayPrecision, side === 'buy' ? 'down' : 'up');
+    const worstStop = Math.abs(bound - stopPrice);
+    const size = this.cfdSize(spec, bound, worstStop, factor);
+    if (size.units === null) return size.note ?? 'size unavailable';
+    return {
+      ...common,
+      symbol: sym,
+      underlying: sym,
+      assetClass: 'cfd',
+      side,
+      positionIntent: side === 'buy' ? 'buy_to_open' : 'sell_to_open',
+      // Fill-or-kill at the bound: fills now at the market (or better) or not at all — never rests.
+      type: 'limit',
+      timeInForce: 'fok',
+      qty: size.units,
+      limitPrice: bound,
+      meta: {
+        multiplier: factor,
+        direction,
+        signal: signalMeta,
+        quote: { bid: st.bid, ask: st.ask, at: st.quoteAt },
+        exitPlan: plan,
+        protectiveStop: { price: stopPrice },
+        riskAtStop: size.units * worstStop * factor,
+      },
+      referencePrice: ref,
+    };
+  }
+
   private sizeFor(price: number, multiplier: number): number {
     const L = this.config.limits;
     const notionalCap = Math.min(L.maxPositionNotional, this.d.maxPositionNotional());
@@ -276,7 +375,7 @@ export class Worker {
       const spot = st?.last ?? (st?.bid !== null && st?.ask !== null && st ? (st.bid! + st.ask!) / 2 : null);
       if (spot === null || spot === undefined) return this.block('no live price for the underlying');
 
-      let req: OrderRequest & { signalBarCloseAt: number; referencePrice: number | null };
+      let req: EntryRequest;
       const common = {
         workerId: this.id,
         source: 'WORKER' as const,
@@ -321,6 +420,10 @@ export class Worker {
           meta: { multiplier: c.multiplier, direction, signal: signalMeta, quote: { bid: q?.bid ?? c.bid, ask, at: q?.quoteAt ?? c.quoteTime } },
           referencePrice: ask,
         };
+      } else if (this.config.instrument === 'CFD') {
+        const r = await this.cfdEntry(direction, common, signalMeta);
+        if (typeof r === 'string') return this.block(r);
+        req = r;
       } else {
         if (direction === 'PUT' && !this.config.allowShort) return this.block('PUT signal — short selling disabled for this worker');
         const side = direction === 'CALL' ? 'buy' : 'sell';
@@ -407,15 +510,59 @@ export class Worker {
       const q = this.d.marketData.optionQuote(pos.symbol);
       return { price: q?.mid ?? q?.last ?? null, fresh: !!q && !q.stale };
     }
+    if (pos.assetClass === 'cfd') {
+      const st = this.d.marketData.state(pos.symbol);
+      const f = this.d.marketData.freshness(pos.symbol);
+      const mid = st && st.bid !== null && st.ask !== null ? (st.bid + st.ask) / 2 : (st?.last ?? null);
+      return { price: mid, fresh: !f.stale };
+    }
     const st = this.d.marketData.state(pos.symbol);
     const f = this.d.marketData.freshness(pos.symbol);
     const mid = st && st.bid !== null && st.ask !== null ? (st.bid + st.ask) / 2 : null;
     return { price: st?.last ?? mid, fresh: !f.stale };
   }
 
+  /** The exit plan stored with the open trade (survives restarts), else one from the live ATR. */
+  private planFor(pos: LedgerPosition): ExitPlan | null {
+    const snap = this.d.ledger.openTrade(pos.tradeId)?.riskSnapshot as { exitPlan?: ExitPlan | null } | null | undefined;
+    const p = snap?.exitPlan;
+    if (p && p.stopDistance > 0 && p.targetDistance > 0) return p;
+    return this.exitPlan();
+  }
+
+  /** CFD exits are judged on the price we'd actually get: the bid for longs, the ask for shorts. */
+  private cfdExitReason(pos: LedgerPosition, now: number): { reason: string; urgent: boolean } | null {
+    const st = this.d.marketData.state(pos.symbol);
+    if (!st || st.bid === null || st.ask === null || this.d.marketData.freshness(pos.symbol).stale) return null;
+    const x = this.config.exits;
+    const long = pos.qty > 0;
+    const exec = long ? st.bid : st.ask;
+    if (!this.d.calendar.isOpen(now)) {
+      // Outside the trading window (e.g. after a restart): don't carry it — close while the broker allows.
+      return st.tradeable === false ? null : { reason: 'SESSION_CLOSED', urgent: true };
+    }
+    const toClose = this.d.calendar.minutesToClose(now);
+    if (toClose !== null && toClose <= x.flattenBeforeCloseMinutes) return { reason: 'END_OF_DAY', urgent: true };
+    const plan = this.planFor(pos);
+    if (plan) {
+      const stopHit = long ? exec <= pos.avgPrice - plan.stopDistance : exec >= pos.avgPrice + plan.stopDistance;
+      if (stopHit) return { reason: 'STOP_LOSS', urgent: true };
+      const targetHit = long ? exec >= pos.avgPrice + plan.targetDistance : exec <= pos.avgPrice - plan.targetDistance;
+      if (targetHit) return { reason: 'TAKE_PROFIT', urgent: false };
+    }
+    if (now - pos.openedAt >= x.maxHoldMinutes * 60_000) return { reason: 'TIME_STOP', urgent: false };
+    if (x.exitOnVwapLoss && this.vwapLost) return { reason: 'VWAP_LOST', urgent: false };
+    return null;
+  }
+
   private async manageExit(now: number): Promise<void> {
     const pos = this.position();
     if (!pos || this.exitOrderId || this.busy || now < this.exitBackoffUntil) return;
+    if (pos.assetClass === 'cfd') {
+      const r = this.cfdExitReason(pos, now);
+      if (r) await this.submitExit(pos, r.reason, r.urgent);
+      return;
+    }
     if (pos.assetClass === 'us_option') this.d.marketData.watchOptions(this.id, [pos.symbol]);
     const { price, fresh } = this.markPrice(pos);
     if (price === null || !fresh) return; // can't decide on stale data — surfaced as an unmanaged warning
@@ -443,6 +590,7 @@ export class Worker {
     this.busy = true;
     try {
       const isOption = pos.assetClass === 'us_option';
+      const isCfd = pos.assetClass === 'cfd';
       const side = pos.qty > 0 ? 'sell' : 'buy';
       let type: 'market' | 'limit' = 'market';
       let limitPrice: number | null = null;
@@ -454,7 +602,11 @@ export class Worker {
           limitPrice = roundToTick(px, true, side === 'sell' ? 'down' : 'up');
         }
       }
-      const ref = this.markPrice(pos).price;
+      let ref = this.markPrice(pos).price;
+      if (isCfd) {
+        const st = this.d.marketData.state(pos.symbol);
+        ref = (side === 'sell' ? st?.bid : st?.ask) ?? ref;
+      }
       const order = await this.d.orders.submit({
         workerId: this.id,
         source: 'WORKER',
@@ -464,9 +616,10 @@ export class Worker {
         underlying: pos.underlying ?? parseOccSymbol(pos.symbol)?.root ?? pos.symbol,
         assetClass: pos.assetClass,
         side,
-        positionIntent: isOption ? (side === 'sell' ? 'sell_to_close' : 'buy_to_close') : null,
+        positionIntent: isOption || isCfd ? (side === 'sell' ? 'sell_to_close' : 'buy_to_close') : null,
         type,
-        timeInForce: 'day',
+        // CFD exits: market fill-or-kill, reduce-only at the broker (can never open a reverse position).
+        timeInForce: isCfd ? 'fok' : 'day',
         qty: Math.abs(pos.qty),
         limitPrice,
         stopPrice: null,
@@ -528,7 +681,49 @@ export class Worker {
     if (!pos) return 0;
     const { price } = this.markPrice(pos);
     if (price === null) return null;
-    return (price - pos.avgPrice) * pos.qty * pos.multiplier;
+    const mult = pos.assetClass === 'cfd' ? (this.d.instruments.homeFactor(pos.symbol) ?? pos.multiplier) : pos.multiplier;
+    return (price - pos.avgPrice) * pos.qty * mult;
+  }
+
+  /** Live instrument facts and the size the next entry would use (CFD workers). */
+  private marketView(): WorkerMarketView | null {
+    if (this.config.instrument !== 'CFD') return null;
+    const sym = this.config.symbol;
+    const spec = this.d.instruments.get(sym);
+    const st = this.d.marketData.state(sym);
+    const factor = this.d.instruments.homeFactor(sym);
+    const acct = this.d.account();
+    const mid = st && st.bid !== null && st.ask !== null ? (st.bid + st.ask) / 2 : (st?.last ?? null);
+    const spread = st && st.bid !== null && st.ask !== null ? st.ask - st.bid : null;
+    const plan = this.exitPlan(spread);
+    let plannedUnits: number | null = null;
+    let sizingNote: string | null = null;
+    if (!spec) sizingNote = this.d.instruments.loaded ? `${sym} is not offered to this account` : 'instrument rules not loaded yet';
+    else if (mid === null) sizingNote = 'no live price';
+    else if (factor === null) sizingNote = 'currency conversion rate unavailable';
+    else if (!plan) sizingNote = 'waiting for ATR (needs ~15 one-minute bars)';
+    else {
+      const slip = Math.min((mid * this.config.entrySlippagePct) / 100, plan.stopDistance * 0.25);
+      const r = this.cfdSize(spec, mid + slip, plan.stopDistance + slip, factor);
+      plannedUnits = r.units;
+      sizingNote = r.note;
+    }
+    return {
+      displayName: instrumentName(sym),
+      tradeable: st?.tradeable ?? null,
+      listed: spec !== null,
+      unitsPrecision: spec?.unitsPrecision ?? null,
+      minUnits: spec?.minUnits ?? null,
+      displayPrecision: spec?.displayPrecision ?? null,
+      marginRate: this.d.instruments.marginRate(sym, acct),
+      homeFactor: factor,
+      minNotional: spec && mid !== null && factor !== null ? spec.minUnits * mid * factor : null,
+      currency: acct?.currency ?? null,
+      plannedStop: plan?.stopDistance ?? null,
+      plannedTarget: plan?.targetDistance ?? null,
+      plannedUnits,
+      sizingNote,
+    };
   }
 
   private towerState(): { state: TowerState; text: string } {
@@ -539,8 +734,8 @@ export class Worker {
     if (halt) return { state: 'HALTED', text: halt };
     if (this.transient) return { state: this.transient.state, text: this.transient.state === 'PROFIT' ? 'PROFIT LOCKED' : 'POSITION CLOSED' };
     if (activeOrder && !isTerminal(activeOrder.state)) return { state: 'ORDER_PENDING', text: `ORDER ${activeOrder.state.replace('_', ' ')}` };
-    if (pos) return { state: 'IN_TRADE', text: 'IN TRADE' };
-    if (!marketOpen) return { state: 'WATCHING', text: 'MARKET CLOSED · MONITORING' };
+    if (pos) return { state: 'IN_TRADE', text: `IN TRADE · ${directionLabel(pos.direction, pos.assetClass)}` };
+    if (!marketOpen) return { state: 'WATCHING', text: this.config.instrument === 'CFD' ? 'OUTSIDE SESSION · MONITORING' : 'MARKET CLOSED · MONITORING' };
     const stand = this.standDownReason();
     if (stand) return { state: 'STANDING_DOWN', text: stand };
     const suffix = this.autotradeEnabled && this.d.controls.autotrading ? '' : ' · AUTOTRADING OFF';
@@ -611,6 +806,7 @@ export class Worker {
     }
     return {
       config: this.config,
+      market: this.marketView(),
       autotradeEnabled: this.autotradeEnabled,
       towerState: tower.state,
       statusText: tower.text,

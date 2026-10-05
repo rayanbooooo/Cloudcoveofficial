@@ -36,9 +36,9 @@ export async function createEngineHarness(): Promise<EngineHarness> {
   const bus = new EventBus(logger);
   const broker = new MockBroker();
   broker.now = () => clock.now();
-  const ledger = new PositionLedger('paper', db, clock, logger);
+  const ledger = new PositionLedger('alpaca', 'paper', db, clock, logger);
   const audit = new AuditLog(db, logger, clock);
-  const timeline = new Timeline('paper', db, bus, clock, logger);
+  const timeline = new Timeline('alpaca', 'paper', db, bus, clock, logger);
   const alerts = new Alerts(bus, clock);
   const breakerLog: string[] = [];
   const h = { db, clock, bus, broker, ledger, audit, breakerLog, riskOverrides: {} } as EngineHarness;
@@ -62,6 +62,7 @@ export async function createEngineHarness(): Promise<EngineHarness> {
   };
 
   h.engine = new OrderEngine({
+    venue: 'alpaca',
     env: 'paper',
     broker,
     db,

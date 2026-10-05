@@ -2,7 +2,7 @@ import type { TradingEnvironment } from '@scalp-city/shared';
 import { AuditLog } from '../audit/AuditLog.js';
 import { AuthService } from '../auth/AuthService.js';
 import type { BrokerAdapter } from '../broker/types.js';
-import type { AppConfig } from '../config/env.js';
+import { hasCredentials, type AppConfig } from '../config/env.js';
 import type { Clock } from '../core/clock.js';
 import { EventBus } from '../core/eventBus.js';
 import type { Logger } from '../core/logger.js';
@@ -66,7 +66,14 @@ export class App {
       action: 'SYSTEM_START',
       actor: 'system',
       env: this.config.tradingEnvironment,
-      details: { liveTradingEnabled: this.config.liveTradingEnabled, stockFeed: this.config.stockFeed, optionsFeed: this.config.optionsFeed, nonStandardEndpoints: this.config.nonStandardEndpoints },
+      details: {
+        broker: this.config.venue,
+        symbols: this.config.symbols,
+        liveTradingEnabled: this.config.liveTradingEnabled,
+        stockFeed: this.config.venue === 'alpaca' ? this.config.stockFeed : 'oanda',
+        optionsFeed: this.config.venue === 'alpaca' ? this.config.optionsFeed : null,
+        nonStandardEndpoints: this.config.nonStandardEndpoints,
+      },
     });
     this.ctx = this.createContext(this.config.tradingEnvironment);
     await this.ctx.start();
@@ -93,7 +100,7 @@ export class App {
   }
 
   availableEnvs(): TradingEnvironment[] {
-    return (['paper', 'live'] as TradingEnvironment[]).filter((e) => this.config.credentials[e] !== null);
+    return (['paper', 'live'] as TradingEnvironment[]).filter((e) => hasCredentials(this.config, e));
   }
 
   get isSwitching(): boolean {
@@ -108,7 +115,7 @@ export class App {
   async switchEnvironment(target: TradingEnvironment, actor: string): Promise<void> {
     if (this.switching) throw new Error('an environment switch is already in progress');
     if (target === this.ctx.env) return;
-    if (!this.config.credentials[target]) throw new Error(`no credentials configured for ${target.toUpperCase()}`);
+    if (!hasCredentials(this.config, target)) throw new Error(`no credentials configured for ${target.toUpperCase()}`);
     this.switching = true;
     const from = this.ctx.env;
     try {

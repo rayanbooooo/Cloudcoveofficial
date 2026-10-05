@@ -1,4 +1,4 @@
-import type { RiskLimits, RiskLimitsChangePreview } from '@scalp-city/shared';
+import type { RiskLimits, RiskLimitsChangePreview, Venue } from '@scalp-city/shared';
 import { SETTINGS, type SettingsStore } from '../settings/SettingsStore.js';
 
 /** For each limit: does a HIGHER value allow more risk? */
@@ -14,6 +14,7 @@ const HIGHER_IS_RISKIER: Record<keyof RiskLimits, boolean> = {
   maxPriceDeviationPct: true,
   noEntriesBeforeCloseMinutes: false,
   pdtGuard: false,
+  maxRiskPerTrade: true,
 };
 
 export class RiskLimitsError extends Error {}
@@ -26,16 +27,24 @@ export class RiskLimitsError extends Error {}
  */
 export class RiskSettings {
   private limits!: RiskLimits;
+  private readonly key: string;
 
+  /**
+   * Limits are kept per broker: notional sizes that suit options are far too
+   * small for leveraged FX/CFDs (and vice versa). Alpaca keeps the original key.
+   */
   constructor(
     private readonly store: SettingsStore,
     private readonly defaults: RiskLimits,
-  ) {}
+    venue: Venue = 'alpaca',
+  ) {
+    this.key = venue === 'alpaca' ? SETTINGS.riskLimits : `${SETTINGS.riskLimits}.${venue}`;
+  }
 
   async load(): Promise<void> {
-    const stored = await this.store.get<Partial<RiskLimits> | null>(SETTINGS.riskLimits, null);
+    const stored = await this.store.get<Partial<RiskLimits> | null>(this.key, null);
     this.limits = { ...this.defaults, ...(stored ?? {}) };
-    if (!stored) await this.store.set(SETTINGS.riskLimits, this.limits, 'system:seed');
+    if (!stored) await this.store.set(this.key, this.limits, 'system:seed');
   }
 
   get(): RiskLimits {
@@ -76,6 +85,6 @@ export class RiskSettings {
   async apply(next: RiskLimits, actor: string): Promise<void> {
     this.validate(next);
     this.limits = { ...next };
-    await this.store.set(SETTINGS.riskLimits, this.limits, actor);
+    await this.store.set(this.key, this.limits, actor);
   }
 }

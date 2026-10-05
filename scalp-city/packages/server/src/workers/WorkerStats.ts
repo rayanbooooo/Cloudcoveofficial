@@ -1,5 +1,5 @@
 import { DateTime } from 'luxon';
-import type { TradingEnvironment, WorkerStats } from '@scalp-city/shared';
+import type { TradingEnvironment, Venue, WorkerStats } from '@scalp-city/shared';
 import type { Clock } from '../core/clock.js';
 import { iso, n, type Db } from '../db/db.js';
 import { nyDate } from '../market/MarketCalendar.js';
@@ -41,6 +41,7 @@ export class WorkerStatsService {
   private cache = new Map<string, BaseStats>();
 
   constructor(
+    private readonly venue: Venue,
     private readonly env: TradingEnvironment,
     private readonly db: Db,
     private readonly clock: Clock,
@@ -60,26 +61,27 @@ export class WorkerStatsService {
       return s;
     };
 
+    // Entry fills carry realized costs too (broker commission), so every fill event counts.
     const realizedToday = await this.db.query<{ worker_id: string; realized: number }>(
       `SELECT t.worker_id, COALESCE(SUM(e.realized_pnl), 0) AS realized
          FROM trade_events e JOIN trades t ON t.id = e.trade_id
-        WHERE t.env = $1 AND t.worker_id IS NOT NULL AND e.kind = 'EXIT_FILL' AND e.occurred_at >= $2
+        WHERE t.venue = $1 AND t.env = $2 AND t.worker_id IS NOT NULL AND e.kind IN ('EXIT_FILL', 'ENTRY_FILL') AND e.occurred_at >= $3
         GROUP BY t.worker_id`,
-      [this.env, iso(midnight)],
+      [this.venue, this.env, iso(midnight)],
     );
     for (const r of realizedToday.rows) get(r.worker_id).realizedToday = n(r.realized) ?? 0;
 
     const opened = await this.db.query<{ worker_id: string; c: number }>(
-      `SELECT worker_id, COUNT(*) AS c FROM trades WHERE env = $1 AND worker_id IS NOT NULL AND trading_day = $2 GROUP BY worker_id`,
-      [this.env, today],
+      `SELECT worker_id, COUNT(*) AS c FROM trades WHERE venue = $1 AND env = $2 AND worker_id IS NOT NULL AND trading_day = $3 GROUP BY worker_id`,
+      [this.venue, this.env, today],
     );
     for (const r of opened.rows) get(r.worker_id).tradesToday = n(r.c) ?? 0;
 
     const closed = await this.db.query<{ worker_id: string; realized_pnl: number; closed_at: Date }>(
       `SELECT worker_id, realized_pnl, closed_at FROM trades
-        WHERE env = $1 AND worker_id IS NOT NULL AND status = 'CLOSED' AND realized_pnl IS NOT NULL
+        WHERE venue = $1 AND env = $2 AND worker_id IS NOT NULL AND status = 'CLOSED' AND realized_pnl IS NOT NULL
         ORDER BY closed_at ASC`,
-      [this.env],
+      [this.venue, this.env],
     );
     const equity = new Map<string, { cum: number; peak: number }>();
     for (const r of closed.rows) {

@@ -7,6 +7,9 @@ export class WorkerConfigError extends Error {}
 
 /** Validate a worker config change; returns the merged config. */
 export function mergeWorkerConfig(current: WorkerConfigView, patch: WorkerUpdateRequest): WorkerConfigView {
+  if (patch.instrument !== undefined && (current.instrument === 'CFD') !== ((patch.instrument as string) === 'CFD')) {
+    throw new WorkerConfigError(`${current.name} trades ${current.instrument === 'CFD' ? 'the instrument itself' : current.instrument.toLowerCase()} — it cannot switch to ${patch.instrument}`);
+  }
   const next: WorkerConfigView = {
     ...current,
     instrument: patch.instrument ?? current.instrument,
@@ -28,9 +31,14 @@ export function mergeWorkerConfig(current: WorkerConfigView, patch: WorkerUpdate
   positive(L.maxPositionNotional, 'max position');
   positive(L.dailyLossLimit, 'daily loss limit');
   positive(L.dailyGoal, 'daily goal');
+  positive(L.riskPerTrade, 'risk per trade');
   const X = next.exits;
   positive(X.takeProfitPct, 'take profit');
   positive(X.stopLossPct, 'stop loss');
+  positive(X.stopAtr, 'stop (ATR)');
+  positive(X.targetAtr, 'target (ATR)');
+  if (X.stopAtr < 0.5 || X.stopAtr > 10) throw new WorkerConfigError('stop (ATR) must be between 0.5 and 10');
+  if (X.targetAtr < 0.5 || X.targetAtr > 20) throw new WorkerConfigError('target (ATR) must be between 0.5 and 20');
   positive(X.maxHoldMinutes, 'max hold');
   nonNeg(X.flattenBeforeCloseMinutes, 'flatten before close');
   nonNeg(X.cooldownBars, 'cooldown');
@@ -54,6 +62,7 @@ export function workerChangeIncreasesRisk(a: WorkerConfigView, b: WorkerConfigVi
     b.limits.maxShares > a.limits.maxShares ||
     b.limits.maxPositionNotional > a.limits.maxPositionNotional ||
     b.limits.dailyLossLimit > a.limits.dailyLossLimit ||
+    b.limits.riskPerTrade > a.limits.riskPerTrade ||
     b.exits.stopLossPct > a.exits.stopLossPct ||
     b.exits.maxHoldMinutes > a.exits.maxHoldMinutes ||
     b.options.maxSpreadPct > a.options.maxSpreadPct ||
@@ -78,7 +87,7 @@ export class WorkerManager {
   ) {}
 
   async load(): Promise<void> {
-    for (const cfg of await this.repo.list()) this.workers.set(cfg.id, new Worker(cfg, this.deps));
+    for (const cfg of await this.repo.list(this.deps.venue)) this.workers.set(cfg.id, new Worker(cfg, this.deps));
   }
 
   async start(): Promise<void> {

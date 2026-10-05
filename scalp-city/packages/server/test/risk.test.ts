@@ -8,6 +8,7 @@ const blockedBy = (d: ReturnType<typeof evaluateRisk>) => d.blockedBy?.id ?? nul
 function workingOrder(over: Partial<OrderRecord> = {}): OrderRecord {
   return {
     id: 'ord_x',
+    venue: 'alpaca',
     env: 'paper',
     clientOrderId: 'sc-P-entry-x',
     brokerOrderId: 'b-x',
@@ -130,7 +131,7 @@ describe('RiskEngine — spec §122 risk cases', () => {
   it('blocks when a worker already holds a position (duplicate position protection)', () => {
     const s = riskState({
       ledgerPositions: [
-        { env: 'paper', symbol: 'QQQ261005P00590000', workerId: 'qqq-og', tradeId: 't', assetClass: 'us_option', underlying: 'QQQ', direction: 'PUT', qty: 2, avgPrice: 2, multiplier: 100, external: false, openedAt: NOW, updatedAt: NOW },
+        { venue: 'alpaca', env: 'paper', symbol: 'QQQ261005P00590000', workerId: 'qqq-og', tradeId: 't', assetClass: 'us_option', underlying: 'QQQ', direction: 'PUT', qty: 2, avgPrice: 2, multiplier: 100, external: false, openedAt: NOW, updatedAt: NOW },
       ],
     });
     expect(blockedBy(evaluateRisk(optionEntry(), s))).toBe('duplicate_position');

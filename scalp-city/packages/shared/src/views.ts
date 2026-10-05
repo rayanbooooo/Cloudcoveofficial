@@ -1,5 +1,6 @@
 import type {
   AssetClass,
+  BrokerName,
   BrokerStatus,
   ConnectionState,
   DirectionOrNeutral,
@@ -21,6 +22,7 @@ import type {
   TimeInForce,
   TowerState,
   TradingEnvironment,
+  Venue,
 } from './domain.js';
 import type { OptionQuoteView, SymbolQuoteView } from './marketdata.js';
 import type { ConditionResult, StrategyParams } from './signal.js';
@@ -35,7 +37,8 @@ import type { ConditionResult, StrategyParams } from './signal.js';
 
 export interface AccountView {
   available: boolean;
-  broker: 'ALPACA';
+  broker: BrokerName;
+  venue: Venue;
   env: TradingEnvironment;
   accountNumberMasked: string | null;
   status: string | null;
@@ -54,9 +57,20 @@ export interface AccountView {
   initialMargin: number | null;
   maintenanceMargin: number | null;
   multiplier: number | null;
-  /** equity − last_equity, both broker-reported. */
+  /**
+   * Day P&L. Alpaca: equity − last_equity, both broker-reported. OANDA has
+   * no "last equity": it is rebuilt from the broker's own transactions since
+   * 00:00 New York (see dayPnlNote).
+   */
   dayPnl: number | null;
   dayPnlPct: number | null;
+  /** How dayPnl was derived, when it is not a single broker field. */
+  dayPnlNote: string | null;
+  /** Margin in use / available (margin accounts, OANDA). */
+  marginUsed: number | null;
+  marginAvailable: number | null;
+  /** OANDA margin closeout percentage (100% = closeout). */
+  marginCloseoutPct: number | null;
   /** Σ unrealized_pl over broker positions. */
   unrealizedPnl: number | null;
   /** Σ unrealized_intraday_pl over broker positions. */
@@ -186,6 +200,11 @@ export interface SignalView {
 
 export interface WorkerLimits {
   maxTradesPerDay: number;
+  /**
+   * CFD workers: how much the worker is willing to lose if its stop is hit,
+   * in account currency. Position size = riskPerTrade ÷ stop distance.
+   */
+  riskPerTrade: number;
   maxContracts: number;
   maxShares: number;
   maxPositionNotional: number;
@@ -196,8 +215,14 @@ export interface WorkerLimits {
 }
 
 export interface ExitRules {
+  /** Options/shares: take profit at this % gain on the position. */
   takeProfitPct: number;
+  /** Options/shares: stop out at this % loss on the position. */
   stopLossPct: number;
+  /** CFD workers: stop distance in multiples of the 1-bar ATR at entry (also placed at the broker). */
+  stopAtr: number;
+  /** CFD workers: profit target distance in multiples of the 1-bar ATR at entry. */
+  targetAtr: number;
   /** Exit a CALL when price closes below VWAP (PUT: above). */
   exitOnVwapLoss: boolean;
   maxHoldMinutes: number;
@@ -267,8 +292,34 @@ export interface WorkerPositionView {
   option: OptionContractInfo | null;
 }
 
+/** Live instrument facts for a CFD worker (OANDA); null for options/shares workers. */
+export interface WorkerMarketView {
+  displayName: string;
+  /** Broker says the instrument can be traded right now (null = unknown). */
+  tradeable: boolean | null;
+  /** Instrument listed for this account at the broker. */
+  listed: boolean;
+  unitsPrecision: number | null;
+  minUnits: number | null;
+  displayPrecision: number | null;
+  marginRate: number | null;
+  /** Account-currency value of a 1.0 price move on one unit (quote → home conversion). */
+  homeFactor: number | null;
+  /** Account-currency notional of the minimum size at the current price. */
+  minNotional: number | null;
+  currency: string | null;
+  /** Stop / target distances the next entry would use, from the live ATR (price units). */
+  plannedStop: number | null;
+  plannedTarget: number | null;
+  /** Units the next entry would use at the live price, after every limit (null = can't size). */
+  plannedUnits: number | null;
+  /** Why the next entry can't be sized, if it can't. */
+  sizingNote: string | null;
+}
+
 export interface WorkerView {
   config: WorkerConfigView;
+  market: WorkerMarketView | null;
   /** Worker autotrading switch (runtime only — always OFF after a restart). */
   autotradeEnabled: boolean;
   towerState: TowerState;
@@ -298,6 +349,11 @@ export interface RiskLimits {
   noEntriesBeforeCloseMinutes: number;
   /** Block entries that would trip the pattern-day-trader rule. */
   pdtGuard: boolean;
+  /**
+   * CFD entries: the most an order may lose if its broker-side stop is hit,
+   * in account currency (units × stop distance × conversion).
+   */
+  maxRiskPerTrade: number;
 }
 
 export interface RiskView {
@@ -311,6 +367,8 @@ export interface RiskView {
   maxTradesPerDay: number;
   buyingPower: number | null;
   optionsBuyingPower: number | null;
+  /** Margin accounts (OANDA): margin still available for new positions. */
+  marginAvailable: number | null;
   dataLatencyMs: number | null;
   brokerStatus: BrokerStatus;
   /** Whether new entries can be opened right now (all gates pass). */
@@ -343,6 +401,10 @@ export interface MarketDataStatusView {
   /** Whether workers may trade options on the configured feed. */
   optionsAutotradeAllowed: boolean;
   optionsBlockReason: string | null;
+  /** Volume is a count of price updates (OANDA), not traded size. */
+  tickVolume: boolean;
+  /** 'mid': prices are the midpoint of the broker's bid/ask (no exchange trades exist for OTC FX/CFDs). */
+  priceBasis: 'trades' | 'mid';
   maxDataAgeMs: number;
   symbols: Record<string, { lastEventAt: number | null; ageMs: number | null; stale: boolean }>;
 }
@@ -410,6 +472,7 @@ export interface FlattenStatusView {
 export interface SystemView {
   serverTime: number;
   env: TradingEnvironment;
+  venue: Venue;
   /** Environments with credentials configured (switch targets). */
   availableEnvs: TradingEnvironment[];
   live: {
@@ -436,7 +499,7 @@ export interface SystemView {
     haltReasons: HaltReason[];
   };
   broker: {
-    name: 'ALPACA';
+    name: BrokerName;
     status: BrokerStatus;
     lastOkAt: number | null;
     lastError: string | null;

@@ -20,9 +20,11 @@ export function nyDate(t: number): string {
 }
 
 /**
- * US market calendar and clock (spec §63, §91). The broker's calendar is
- * the source of holidays and early closes — weekdays are never assumed to
- * be trading days. The broker clock is polled to detect server clock skew.
+ * Trading calendar and clock (spec §63, §91). Alpaca: the broker's exchange
+ * calendar is the source of holidays and early closes — weekdays are never
+ * assumed to be trading days. OANDA: instruments trade around the clock, so
+ * sessions are the configured strategy window (see oanda/calendar.ts). The
+ * broker clock is polled to detect server clock skew.
  */
 export class MarketCalendar {
   private sessions = new Map<string, Session>();
@@ -56,10 +58,13 @@ export class MarketCalendar {
     const now = DateTime.fromMillis(this.clock.now(), { zone: NY });
     const start = now.minus({ days: 10 }).toISODate()!;
     const end = now.plus({ days: 10 }).toISODate()!;
+    const exchange = this.broker.calendarSource === 'exchange';
     try {
       const days = await this.broker.getCalendar(start, end);
       this.setSessions(days);
       this.calendarLoadedAt = this.clock.now();
+      // Only an exchange calendar is worth caching; a configured window is recomputed anyway.
+      if (!exchange) return;
       for (const d of days) {
         await this.db.query(
           `INSERT INTO market_sessions(date, open_at, close_at, fetched_at) VALUES ($1,$2,$3,now())
@@ -69,6 +74,7 @@ export class MarketCalendar {
       }
     } catch (err) {
       this.logger.warn({ err: (err as Error).message }, 'calendar fetch failed; using cached sessions');
+      if (!exchange) throw err;
       const { rows } = await this.db.query<{ date: string | Date; open_at: Date; close_at: Date }>(
         `SELECT date, open_at, close_at FROM market_sessions WHERE date BETWEEN $1 AND $2`,
         [start, end],

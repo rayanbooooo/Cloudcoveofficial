@@ -132,7 +132,8 @@ export class Controls {
       if (canceled.length) note(`requested cancel of ${canceled.length} open order(s) at broker`);
       for (let i = 0; i < 20; i++) {
         await deps.account.refreshOpenOrders().catch(() => undefined);
-        if (deps.account.openOrders.length === 0) break;
+        // Stops attached to positions are left in place: closing the position removes them.
+        if (deps.account.openOrders.filter((o) => !o.dependent).length === 0) break;
         await sleep(500);
       }
 
@@ -145,6 +146,7 @@ export class Controls {
       // 3. One closing order per position, through the same risk engine.
       for (const p of positions) {
         const isOption = p.assetClass === 'us_option';
+        const isCfd = p.assetClass === 'cfd';
         const side = p.side === 'long' ? 'sell' : 'buy';
         const qty = p.qtyAvailable ?? p.qty;
         if (qty <= 0) {
@@ -160,13 +162,14 @@ export class Controls {
           underlying: null,
           assetClass: p.assetClass,
           side,
-          positionIntent: isOption ? (side === 'sell' ? 'sell_to_close' : 'buy_to_close') : null,
+          positionIntent: isOption || isCfd ? (side === 'sell' ? 'sell_to_close' : 'buy_to_close') : null,
           type: 'market',
-          timeInForce: 'day',
+          // CFDs: market fill-or-kill, reduce-only at the broker.
+          timeInForce: isCfd ? 'fok' : 'day',
           qty,
           limitPrice: null,
           stopPrice: null,
-          meta: { multiplier: isOption ? 100 : 1, exitReason: 'FLATTEN_ALL' },
+          meta: { multiplier: p.multiplier ?? (isOption ? 100 : 1), exitReason: 'FLATTEN_ALL' },
           actor,
         });
         note(`${p.symbol}: ${side} ${qty} → ${order.state}${order.rejectReason ? ` (${order.rejectReason})` : ''}`);

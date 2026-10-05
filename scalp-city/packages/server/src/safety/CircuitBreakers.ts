@@ -1,4 +1,4 @@
-import type { BreakerView, TradingEnvironment } from '@scalp-city/shared';
+import type { BreakerView, TradingEnvironment, Venue } from '@scalp-city/shared';
 import type { AuditLog } from '../audit/AuditLog.js';
 import type { Clock } from '../core/clock.js';
 import type { EventBus } from '../core/eventBus.js';
@@ -58,10 +58,12 @@ export class CircuitBreakers {
     private readonly timeline: Timeline,
     private readonly clock: Clock,
     private readonly logger: Logger,
+    private readonly venue: Venue = 'alpaca',
   ) {}
 
+  /** Breakers belong to one broker account: Alpaca keeps the original key, other venues their own. */
   private key(): string {
-    return `${SETTINGS.latchedBreakers}.${this.env}`;
+    return this.venue === 'alpaca' ? `${SETTINGS.latchedBreakers}.${this.env}` : `${SETTINGS.latchedBreakers}.${this.venue}.${this.env}`;
   }
 
   async load(): Promise<void> {

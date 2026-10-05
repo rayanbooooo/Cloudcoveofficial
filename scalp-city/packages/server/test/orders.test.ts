@@ -65,7 +65,7 @@ describe('OrderEngine — lifecycle (spec §122 orders)', () => {
     h.riskOverrides = { limits: { ...(await import('./support/riskFixtures.js')).LIMITS, maxOrderNotional: 1e6, maxPositionNotional: 1e6 } };
     const req = entryRequest({ qty: 20 });
     req.meta = { multiplier: 100, direction: 'CALL' };
-    h.riskOverrides.worker = { config: (await import('./support/riskFixtures.js')).workerConfig({ limits: { maxTradesPerDay: 5, maxContracts: 20, maxShares: 100, maxPositionNotional: 1e6, dailyLossLimit: 200, dailyGoal: 500 } }), autotradeEnabled: true, dayPnl: 0, realizedToday: 0 };
+    h.riskOverrides.worker = { config: (await import('./support/riskFixtures.js')).workerConfig({ limits: { maxTradesPerDay: 5, maxContracts: 20, maxShares: 100, maxPositionNotional: 1e6, dailyLossLimit: 200, dailyGoal: 500, riskPerTrade: 10 } }), autotradeEnabled: true, dayPnl: 0, realizedToday: 0 };
     const order = await h.engine.submit(req);
     expect(order.state).toBe('ACCEPTED');
     await h.engine.onTradeUpdate(h.broker.fill(order.clientOrderId, 8, 3.6));

@@ -35,6 +35,11 @@ export async function createPgliteDb(): Promise<Db> {
   return wrap(pg);
 }
 
+/** An empty database with no migrations applied (for upgrade tests). */
+export async function createEmptyPgliteDb(): Promise<Db> {
+  return wrap(await newInstance());
+}
+
 function wrap(pg: PGliteInstance): Db {
   const toResult = <T>(r: { rows: unknown[]; affectedRows?: number }): QueryResult<T> => ({
     rows: r.rows as T[],

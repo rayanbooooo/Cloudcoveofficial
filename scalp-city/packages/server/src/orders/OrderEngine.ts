@@ -1,18 +1,21 @@
 import {
   LIVE_ORDER_STATES,
   SUPPORTED_ORDER_TYPES,
+  isOandaSymbol,
   type CityEvent,
   type OrderState,
   type OrderView,
   type RejectedBy,
   type RiskDecisionView,
   type TradingEnvironment,
+  type Venue,
 } from '@scalp-city/shared';
 import type { AuditLog } from '../audit/AuditLog.js';
 import { BrokerError, type BrokerAdapter, type BrokerOrder, type BrokerTradeUpdate } from '../broker/types.js';
 import type { Clock } from '../core/clock.js';
 import { sleep } from '../core/clock.js';
 import type { EventBus } from '../core/eventBus.js';
+import { formatMoney, formatPrice, formatQty } from '../core/format.js';
 import { newClientOrderId, newId } from '../core/ids.js';
 import type { Logger } from '../core/logger.js';
 import { Mutex } from '../core/mutex.js';
@@ -21,7 +24,7 @@ import { nyDate } from '../market/MarketCalendar.js';
 import type { FillEffect, PositionLedger } from '../positions/PositionLedger.js';
 import { evaluateRisk, isOpening, type ProposedOrder, type RiskState } from '../risk/RiskEngine.js';
 import type { Alerts, Timeline } from '../system/Timeline.js';
-import { OrderRepository, UniqueViolation } from './OrderRepository.js';
+import { OrderRepository, rowToOrder, UniqueViolation } from './OrderRepository.js';
 import { fillDeltaPrice, isTerminal, nextState } from './stateMachine.js';
 import type { OrderRecord, OrderRequest } from './types.js';
 
@@ -39,6 +42,7 @@ export interface BreakerSignals {
 }
 
 export interface OrderEngineDeps {
+  venue: Venue;
   env: TradingEnvironment;
   broker: BrokerAdapter;
   db: Db;
@@ -55,18 +59,42 @@ export interface OrderEngineDeps {
   dailyPnl: () => number | null;
   /** Called after fills so account/positions refresh quickly. */
   onFills: () => void;
+  /** Account currency, for messages ("$12.30", "£4.10"). */
+  currency?: () => string | null;
   /** Delays between attempts to resolve an order whose submission outcome is unknown. */
   resolutionDelaysMs?: number[];
 }
 
+/** Client order id suffix of the broker-side stop that protects an entry. */
+export const PROTECTIVE_SUFFIX = '.sl';
+
+const CFD_TIF: Record<string, readonly string[]> = { market: ['fok', 'ioc'], limit: ['fok', 'ioc', 'gtc', 'day'] };
+
 export function validateOrder(o: OrderRecord): string | null {
-  if (!Number.isInteger(o.qty) || o.qty <= 0) return 'quantity must be a positive whole number';
+  const cfd = o.assetClass === 'cfd';
+  if (cfd) {
+    if (!Number.isFinite(o.qty) || o.qty <= 0) return 'quantity must be a positive number of units';
+    if (Math.abs(o.qty * 1e6 - Math.round(o.qty * 1e6)) > 1e-6) return 'quantity has more than 6 decimals';
+  } else if (!Number.isInteger(o.qty) || o.qty <= 0) {
+    return 'quantity must be a positive whole number';
+  }
   if (!SUPPORTED_ORDER_TYPES[o.assetClass].includes(o.type)) return `${o.type} orders are not supported for ${o.assetClass}`;
   if (o.assetClass === 'us_option' && o.timeInForce !== 'day') return 'options orders must be DAY orders';
+  if (cfd && !CFD_TIF[o.type]?.includes(o.timeInForce)) return `${o.type} CFD orders cannot be ${o.timeInForce.toUpperCase()}`;
+  if (cfd && !o.positionIntent) return 'CFD orders must state whether they open or close a position';
   if ((o.type === 'limit' || o.type === 'stop_limit') && !(o.limitPrice !== null && o.limitPrice > 0)) return 'limit price required';
   if ((o.type === 'stop' || o.type === 'stop_limit') && !(o.stopPrice !== null && o.stopPrice > 0)) return 'stop price required';
   if (o.type === 'market' && (o.limitPrice !== null || o.stopPrice !== null)) return 'market orders take no prices';
-  if (!/^[A-Z0-9.]{1,21}$/.test(o.symbol)) return 'invalid symbol';
+  if (cfd ? !isOandaSymbol(o.symbol) : !/^[A-Z0-9.]{1,21}$/.test(o.symbol)) return 'invalid symbol';
+  const stop = o.meta.protectiveStop?.price;
+  if (stop !== undefined && stop !== null) {
+    if (!cfd) return 'protective stops are only supported for CFD orders';
+    if (!(stop > 0)) return 'protective stop must be a positive price';
+    if (o.positionIntent?.endsWith('_close')) return 'a protective stop only belongs on an order that opens a position';
+    if (o.limitPrice !== null && (o.side === 'buy' ? stop >= o.limitPrice : stop <= o.limitPrice)) {
+      return `protective stop ${stop} is on the wrong side of the ${o.side} price ${o.limitPrice}`;
+    }
+  }
   return null;
 }
 
@@ -99,7 +127,11 @@ export class OrderEngine {
 
   async load(): Promise<void> {
     const since = this.d.clock.now() - 36 * 3_600_000;
-    for (const o of await this.repo.loadWorkingSet(this.d.env, since)) this.track(o);
+    for (const o of await this.repo.loadWorkingSet(this.d.venue, this.d.env, since)) this.track(o);
+  }
+
+  private money(v: number, sign = false): string {
+    return formatMoney(v, this.d.currency?.() ?? 'USD', { sign });
   }
 
   private track(o: OrderRecord): void {
@@ -124,9 +156,18 @@ export class OrderEngine {
     return [...this.orders.values()].filter((o) => LIVE_ORDER_STATES.has(o.state) || o.state === 'ERROR' || o.state === 'CREATED' || o.state === 'VALIDATING' || o.state === 'RISK_CHECK');
   }
 
-  /** Orders that can still fill at the broker (excludes not-yet-submitted). */
+  /**
+   * Orders that can still fill at the broker (excludes not-yet-submitted).
+   * Broker-side protective stops are not "working orders": they only ever
+   * close a position and are canceled by the broker when it closes.
+   */
   workingOrders(): OrderRecord[] {
-    return [...this.orders.values()].filter((o) => LIVE_ORDER_STATES.has(o.state));
+    return [...this.orders.values()].filter((o) => LIVE_ORDER_STATES.has(o.state) && o.purpose !== 'PROTECTIVE_STOP');
+  }
+
+  /** Broker-side stops currently protecting positions. */
+  protectiveStops(): OrderRecord[] {
+    return [...this.orders.values()].filter((o) => LIVE_ORDER_STATES.has(o.state) && o.purpose === 'PROTECTIVE_STOP');
   }
 
   /**
@@ -134,10 +175,13 @@ export class OrderEngine {
    * fill, plus recent unknown-outcome orders (ERROR) — conservatively treated
    * as possibly live for ten minutes. Drafts awaiting their own risk check
    * are excluded; only one order is ever inside the check at a time.
+   * Protective stops are excluded: they can only reduce an open position.
    */
   riskOpenOrders(): OrderRecord[] {
     const now = this.d.clock.now();
-    return [...this.orders.values()].filter((o) => LIVE_ORDER_STATES.has(o.state) || (o.state === 'ERROR' && now - o.updatedAt < 10 * 60_000));
+    return [...this.orders.values()].filter(
+      (o) => o.purpose !== 'PROTECTIVE_STOP' && (LIVE_ORDER_STATES.has(o.state) || (o.state === 'ERROR' && now - o.updatedAt < 10 * 60_000)),
+    );
   }
 
   recent(limit = 100): OrderRecord[] {
@@ -217,6 +261,7 @@ export class OrderEngine {
     const now = this.d.clock.now();
     return {
       id: newId('ord'),
+      venue: this.d.venue,
       env: this.d.env,
       clientOrderId: newClientOrderId(this.d.env, req.purpose),
       brokerOrderId: null,
@@ -260,7 +305,7 @@ export class OrderEngine {
       signalId: o.signalId,
       signalBarCloseAt: req.signalBarCloseAt ?? null,
       symbol: o.symbol,
-      underlying: o.underlying ?? (o.assetClass === 'us_equity' ? o.symbol : null),
+      underlying: o.underlying ?? (o.assetClass === 'us_option' ? null : o.symbol),
       assetClass: o.assetClass,
       side: o.side,
       qty: o.qty,
@@ -269,6 +314,7 @@ export class OrderEngine {
       stopPrice: o.stopPrice,
       multiplier: o.meta.multiplier,
       referencePrice: req.referencePrice ?? null,
+      protectiveStop: o.meta.protectiveStop?.price ?? null,
     };
   }
 
@@ -351,6 +397,7 @@ export class OrderEngine {
         limitPrice: order.limitPrice,
         stopPrice: order.stopPrice,
         positionIntent: order.positionIntent,
+        protectiveStop: order.meta.protectiveStop ? { price: order.meta.protectiveStop.price, clientOrderId: `${order.clientOrderId}${PROTECTIVE_SUFFIX}` } : null,
       });
       await this.applyBroker(order, bo, { event: 'submit_response', eventKey: `submit:${order.id}`, at: this.d.clock.now(), update: null });
       void this.d.audit.record({
@@ -363,7 +410,13 @@ export class OrderEngine {
         clientOrderId: order.clientOrderId,
         details: { brokerOrderId: bo.id, brokerStatus: bo.status },
       });
-      this.d.timeline.add({ kind: 'order', workerId: order.workerId, symbol: order.symbol, title: `Order submitted · ${order.side.toUpperCase()} ${order.qty} ${order.symbol}`, detail: `${order.type}${order.limitPrice ? ` @ ${order.limitPrice}` : ''} · ${bo.status}` });
+      this.d.timeline.add({
+        kind: 'order',
+        workerId: order.workerId,
+        symbol: order.symbol,
+        title: `Order submitted · ${order.side.toUpperCase()} ${formatQty(order.qty)} ${order.symbol}`,
+        detail: `${order.type}${order.limitPrice ? ` @ ${order.limitPrice}` : ''}${order.meta.protectiveStop ? ` · broker stop ${order.meta.protectiveStop.price}` : ''} · ${bo.status}`,
+      });
       this.city('ORDER_SUBMITTED', order, null, null);
     } catch (err) {
       if (err instanceof BrokerError && !err.ambiguous) {
@@ -458,7 +511,7 @@ export class OrderEngine {
     return { ok: true, message: 'cancel requested — awaiting broker confirmation' };
   }
 
-  /** Cancel every working order this engine placed. */
+  /** Cancel every working order this engine placed (protective stops stay: they only ever reduce risk). */
   async cancelAllWorking(actor: string): Promise<{ requested: number; failed: string[] }> {
     const failed: string[] = [];
     const working = this.workingOrders();
@@ -477,11 +530,12 @@ export class OrderEngine {
       // Possibly ours but outside the working set.
       const { rows } = await this.d.db.query('SELECT id FROM orders WHERE client_order_id = $1', [u.order.clientOrderId]);
       if (rows.length) {
-        const recent = await this.repo.loadWorkingSet(this.d.env, this.d.clock.now() - 7 * 86_400_000);
+        const recent = await this.repo.loadWorkingSet(this.d.venue, this.d.env, this.d.clock.now() - 7 * 86_400_000);
         for (const o of recent) if (!this.orders.has(o.id)) this.track(o);
         order = this.byClientOrderId(u.order.clientOrderId);
       }
     }
+    if (!order) order = await this.adoptProtectiveStop(u.order);
     if (!order) {
       this.noteExternal(u.order);
       return;
@@ -491,6 +545,95 @@ export class OrderEngine {
     if (u.event === 'order_cancel_rejected') {
       this.d.timeline.add({ kind: 'order', severity: 'warn', workerId: order.workerId, symbol: order.symbol, title: 'Cancel rejected by broker', detail: `order is ${u.order.status}` });
     }
+  }
+
+  /**
+   * A broker-side stop loss created for one of our entries (client id
+   * "<entry>.sl"): record it locally so its fill closes the position in the
+   * ledger like any other exit. Returns null for anything else.
+   */
+  async adoptProtectiveStop(bo: BrokerOrder): Promise<OrderRecord | null> {
+    if (!bo.clientOrderId.endsWith(PROTECTIVE_SUFFIX)) return null;
+    const existing = this.byClientOrderId(bo.clientOrderId);
+    if (existing) return existing;
+    const parentId = bo.clientOrderId.slice(0, -PROTECTIVE_SUFFIX.length);
+    let parent = this.byClientOrderId(parentId);
+    if (!parent) {
+      const { rows } = await this.d.db.query('SELECT * FROM orders WHERE client_order_id = $1', [parentId]);
+      parent = rows[0] ? rowToOrder(rows[0]) : null;
+    }
+    if (!parent || parent.venue !== this.d.venue || parent.env !== this.d.env) return null;
+    const p = parent;
+    return this.lock.run(async () => {
+      const again = this.byClientOrderId(bo.clientOrderId);
+      if (again) return again;
+      const now = this.d.clock.now();
+      const rec: OrderRecord = {
+        id: newId('ord'),
+        venue: this.d.venue,
+        env: this.d.env,
+        clientOrderId: bo.clientOrderId,
+        brokerOrderId: bo.id,
+        workerId: p.workerId,
+        source: p.source,
+        purpose: 'PROTECTIVE_STOP',
+        signalId: null,
+        tradeId: p.tradeId,
+        symbol: p.symbol,
+        underlying: p.underlying,
+        assetClass: p.assetClass,
+        side: p.side === 'buy' ? 'sell' : 'buy',
+        positionIntent: p.side === 'buy' ? 'sell_to_close' : 'buy_to_close',
+        type: 'stop',
+        timeInForce: 'gtc',
+        qty: bo.qty !== null && bo.qty > 0 ? bo.qty : p.filledQty > 0 ? p.filledQty : p.qty,
+        limitPrice: null,
+        stopPrice: bo.stopPrice ?? p.meta.protectiveStop?.price ?? null,
+        state: 'ACCEPTED',
+        brokerStatus: bo.status,
+        filledQty: 0,
+        filledAvgPrice: null,
+        rejectedBy: null,
+        rejectReason: null,
+        errorMessage: null,
+        risk: null,
+        meta: { multiplier: p.meta.multiplier, direction: p.meta.direction, exitReason: 'BROKER_STOP', requestedBy: 'broker', parentClientOrderId: p.clientOrderId },
+        createdAt: bo.createdAt ?? now,
+        submittedAt: bo.createdAt ?? now,
+        updatedAt: now,
+        filledAt: null,
+      };
+      try {
+        await this.repo.insert(rec);
+      } catch (err) {
+        if (!(err instanceof UniqueViolation)) throw err;
+        const { rows } = await this.d.db.query('SELECT * FROM orders WHERE client_order_id = $1', [bo.clientOrderId]);
+        if (!rows[0]) throw err;
+        const loaded = rowToOrder(rows[0]);
+        this.track(loaded);
+        return loaded;
+      }
+      this.track(rec);
+      this.d.bus.emit('ORDER_UPDATED', { order: rec, prevState: null });
+      void this.d.audit.record({
+        action: 'ORDER_ACCEPTED',
+        actor: 'broker',
+        env: this.d.env,
+        workerId: rec.workerId,
+        symbol: rec.symbol,
+        orderId: rec.id,
+        clientOrderId: rec.clientOrderId,
+        details: { protectiveStop: true, stopPrice: rec.stopPrice, parent: p.clientOrderId, brokerOrderId: bo.id },
+      });
+      this.d.timeline.add({
+        kind: 'order',
+        workerId: rec.workerId,
+        symbol: rec.symbol,
+        title: `Broker stop active · ${rec.symbol}${rec.stopPrice !== null ? ` @ ${rec.stopPrice}` : ''}`,
+        detail: 'Held at the broker — protects the position even if Scalp City is offline',
+      });
+      return rec;
+    });
   }
 
   private noteExternal(bo: BrokerOrder): void {
@@ -555,7 +698,19 @@ export class OrderEngine {
       if ((prevState === 'SUBMITTING' || prevState === 'ERROR') && t.changed) next.errorMessage = null;
       if (t.state === 'REJECTED' && prevState !== 'REJECTED') {
         next.rejectedBy = 'BROKER';
-        next.rejectReason = order.rejectReason ?? 'rejected by broker';
+        next.rejectReason = bo.statusReason ?? order.rejectReason ?? 'rejected by broker';
+      }
+      if ((t.state === 'CANCELED' || t.state === 'EXPIRED') && t.changed && bo.statusReason) next.meta.cancelReason = bo.statusReason;
+
+      // The broker's own realized P&L for exactly this fill, when it reports one.
+      let brokerRealized: number | null = null;
+      if (delta > 0) {
+        const ev = ctx.update;
+        if (ev && ev.realizedPl !== undefined && ev.realizedPl !== null && ev.qty !== null && Math.abs(ev.qty - delta) < 1e-9) {
+          brokerRealized = ev.realizedPl;
+        } else if (bo.realizedPl !== undefined && bo.realizedPl !== null && prevFilled === 0 && Math.abs(newFilled - bo.filledQty) < 1e-9) {
+          brokerRealized = bo.realizedPl;
+        }
       }
 
       let effect: FillEffect | null = null;
@@ -575,7 +730,7 @@ export class OrderEngine {
         });
         if (!isNew) return false;
         if (delta > 0 && fillPrice !== null) {
-          effect = await this.d.ledger.applyFill(q, next, delta, fillPrice, ctx.at, { dailyPnl: this.d.dailyPnl() });
+          effect = await this.d.ledger.applyFill(q, next, delta, fillPrice, ctx.at, { dailyPnl: this.d.dailyPnl(), brokerRealized });
           if (effect.opened) next.tradeId = effect.opened.id;
           else if (!next.tradeId) next.tradeId = effect.closed?.id ?? this.d.ledger.get(next.symbol)?.tradeId ?? null;
         }
@@ -600,14 +755,15 @@ export class OrderEngine {
       bus.emit('FILL', { order, qty: delta, price: fillPrice, at });
       const partial = order.state !== 'FILLED';
       void audit.record({ ...base, action: partial ? 'ORDER_PARTIALLY_FILLED' : 'ORDER_FILLED', actor: 'broker', details: { qty: delta, price: fillPrice, filledQty: order.filledQty, orderQty: order.qty } });
+      const what = order.purpose === 'PROTECTIVE_STOP' ? 'Broker stop filled' : partial ? 'Partial fill' : 'Order filled';
       timeline.add({
         kind: 'fill',
-        severity: 'success',
+        severity: order.purpose === 'PROTECTIVE_STOP' ? 'warn' : 'success',
         ts: at,
         workerId: order.workerId,
         symbol: order.symbol,
-        title: `${partial ? 'Partial fill' : 'Order filled'} · ${order.side.toUpperCase()} ${delta} ${order.symbol} @ ${fillPrice.toFixed(2)}`,
-        detail: partial ? `${order.filledQty}/${order.qty} filled, ${order.qty - order.filledQty} remaining` : null,
+        title: `${what} · ${order.side.toUpperCase()} ${formatQty(delta)} ${order.symbol} @ ${formatPrice(fillPrice, order.symbol)}`,
+        detail: partial ? `${formatQty(order.filledQty)}/${formatQty(order.qty)} filled, ${formatQty(order.qty - order.filledQty)} remaining` : null,
       });
       this.d.onFills();
     }
@@ -617,13 +773,25 @@ export class OrderEngine {
         case 'FILLED':
           bus.emit('ORDER_FILLED', { order });
           if (isOpening(order.purpose)) this.city('ORDER_FILLED', order, order.filledAvgPrice, null);
-          alerts.raise('ORDER_FILLED', 'success', 'Order filled', `${order.side.toUpperCase()} ${order.filledQty} ${order.symbol} @ ${order.filledAvgPrice?.toFixed(2) ?? 'n/a'}`);
+          alerts.raise(
+            'ORDER_FILLED',
+            order.purpose === 'PROTECTIVE_STOP' ? 'warn' : 'success',
+            order.purpose === 'PROTECTIVE_STOP' ? 'Broker stop filled' : 'Order filled',
+            `${order.side.toUpperCase()} ${formatQty(order.filledQty)} ${order.symbol} @ ${order.filledAvgPrice === null ? 'n/a' : formatPrice(order.filledAvgPrice, order.symbol)}`,
+          );
           break;
-        case 'CANCELED':
+        case 'CANCELED': {
           bus.emit('ORDER_CANCELED', { order });
-          void audit.record({ ...base, action: 'ORDER_CANCELED', actor: 'broker', details: { filledQty: order.filledQty } });
-          timeline.add({ kind: 'order', ts: at, workerId: order.workerId, symbol: order.symbol, title: `Order canceled · ${order.symbol}`, detail: order.filledQty > 0 ? `${order.filledQty}/${order.qty} filled before cancel` : null });
+          void audit.record({ ...base, action: 'ORDER_CANCELED', actor: 'broker', details: { filledQty: order.filledQty, reason: order.meta.cancelReason ?? null } });
+          const reason = order.meta.cancelReason ? cancelReasonText(order.meta.cancelReason) : null;
+          if (order.purpose === 'PROTECTIVE_STOP') {
+            timeline.add({ kind: 'order', ts: at, workerId: order.workerId, symbol: order.symbol, title: `Broker stop removed · ${order.symbol}`, detail: reason ?? 'canceled' });
+          } else {
+            const parts = [order.filledQty > 0 ? `${formatQty(order.filledQty)}/${formatQty(order.qty)} filled before cancel` : null, reason].filter(Boolean);
+            timeline.add({ kind: 'order', ts: at, workerId: order.workerId, symbol: order.symbol, title: `Order canceled · ${order.symbol}`, detail: parts.length ? parts.join(' · ') : null });
+          }
           break;
+        }
         case 'EXPIRED':
           void audit.record({ ...base, action: 'ORDER_EXPIRED', actor: 'broker' });
           timeline.add({ kind: 'order', ts: at, workerId: order.workerId, symbol: order.symbol, title: `Order expired · ${order.symbol}`, detail: null });
@@ -662,10 +830,10 @@ export class OrderEngine {
         ts: at,
         workerId: order.workerId,
         symbol: order.symbol,
-        title: `Position closed · ${pnl >= 0 ? '+' : '−'}$${Math.abs(pnl).toFixed(2)}`,
+        title: `Position closed · ${this.money(pnl, true)}`,
         detail: t.exitReason,
       });
-      alerts.raise('POSITION_CLOSED', pnl >= 0 ? 'success' : 'warn', 'Position closed', `${order.symbol} ${pnl >= 0 ? '+' : '−'}$${Math.abs(pnl).toFixed(2)}`);
+      alerts.raise('POSITION_CLOSED', pnl >= 0 ? 'success' : 'warn', 'Position closed', `${order.symbol} ${this.money(pnl, true)}`);
       this.city(pnl >= 0 ? 'PROFIT_LOCKED' : 'POSITION_CLOSED', order, fillPrice, pnl);
     }
   }
@@ -730,5 +898,29 @@ export class OrderEngine {
       `INSERT INTO risk_events(env, worker_id, order_id, signal_id, symbol, purpose, approved, blocked_by, checks, occurred_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
       [this.d.env, order.workerId, order.id, order.signalId, order.symbol, order.purpose, decision.approved, decision.blockedBy?.id ?? null, JSON.stringify(decision.checks), iso(decision.evaluatedAt)],
     );
+  }
+}
+
+/** Plain-language version of a broker cancel/reject reason code. */
+export function cancelReasonText(code: string): string {
+  switch (code) {
+    case 'BOUNDS_VIOLATION':
+      return 'price moved past the worst price allowed (not filled)';
+    case 'INSUFFICIENT_MARGIN':
+      return 'not enough margin';
+    case 'INSUFFICIENT_LIQUIDITY':
+      return 'not enough liquidity to fill';
+    case 'MARKET_HALTED':
+      return 'market halted or closed';
+    case 'LINKED_TRADE_CLOSED':
+      return 'position closed';
+    case 'TIME_IN_FORCE_EXPIRED':
+      return 'expired';
+    case 'CLIENT_REQUEST':
+      return 'canceled on request';
+    case 'FIFO_VIOLATION':
+      return 'would break FIFO rules';
+    default:
+      return code.replace(/_/g, ' ').toLowerCase();
   }
 }

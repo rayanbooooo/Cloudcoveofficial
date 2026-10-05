@@ -37,7 +37,7 @@ export class AccountService {
   lastErrorAt: number | null = null;
   /** Set if the broker starts returning a different account than the one we started with. */
   accountChanged: string | null = null;
-  /** Paper/live mismatch detected from the account number (paper numbers start with "PA"). */
+  /** Paper/live mismatch the broker adapter can detect from the account itself. */
   environmentWarning: string | null = null;
 
   private timers: NodeJS.Timeout[] = [];
@@ -161,20 +161,15 @@ export class AccountService {
   }
 
   private checkEnvironment(acct: BrokerAccount): void {
-    const looksPaper = acct.accountNumber.toUpperCase().startsWith('PA');
-    if (this.opts.env === 'live' && looksPaper) {
-      this.environmentWarning = 'LIVE environment is connected to what looks like a PAPER account (account number starts with PA).';
-    } else if (this.opts.env === 'paper' && !looksPaper && acct.accountNumber) {
-      this.environmentWarning = 'PAPER environment is connected to an account whose number does not look like a paper account.';
-    }
+    this.environmentWarning = this.broker.environmentWarning?.(acct) ?? null;
     if (this.environmentWarning) this.logger.error(this.environmentWarning);
   }
 
   private async recordAccount(acct: BrokerAccount): Promise<void> {
     await this.db.query(
-      `INSERT INTO accounts(id, env, broker, account_number_masked, last_status) VALUES ($1,$2,'ALPACA',$3,$4)
+      `INSERT INTO accounts(id, env, broker, account_number_masked, last_status) VALUES ($1,$2,$3,$4,$5)
        ON CONFLICT (id) DO UPDATE SET last_seen_at = now(), last_status = EXCLUDED.last_status`,
-      [acct.id, this.opts.env, maskAccountNumber(acct.accountNumber) ?? '••••', acct.status],
+      [acct.id, this.opts.env, this.broker.name, maskAccountNumber(acct.accountNumber) ?? '••••', acct.status],
     );
   }
 
@@ -204,10 +199,16 @@ export class AccountService {
     return { status: 'CONNECTED', detail: null };
   }
 
-  /** Account day P&L straight from broker numbers: equity − last_equity. */
+  /**
+   * Account day P&L from broker numbers: equity − last_equity (Alpaca), or
+   * the adapter's own figure built from broker transactions (OANDA). Unknown
+   * is null — never 0.
+   */
   dayPnl(): number | null {
     const a = this.account;
-    if (!a || a.equity === null || a.lastEquity === null) return null;
+    if (!a) return null;
+    if (a.dayPnl !== undefined) return a.dayPnl;
+    if (a.equity === null || a.lastEquity === null) return null;
     return a.equity - a.lastEquity;
   }
 

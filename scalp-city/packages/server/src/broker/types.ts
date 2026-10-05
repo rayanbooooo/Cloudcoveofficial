@@ -1,11 +1,13 @@
 import type {
   AssetClass,
+  BrokerName,
   ConnectionState,
   OrderSide,
   OrderType,
   PositionIntent,
   TimeInForce,
   TradingEnvironment,
+  Venue,
 } from '@scalp-city/shared';
 
 /**
@@ -41,6 +43,20 @@ export interface BrokerAccount {
   daytradeCount: number | null;
   optionsApprovedLevel: number | null;
   optionsTradingLevel: number | null;
+  /**
+   * Day P&L computed by the adapter when the broker has no single field for
+   * it (OANDA). `undefined` = use equity − lastEquity; `null` = unknown.
+   */
+  dayPnl?: number | null;
+  dayPnlNote?: string | null;
+  /** Margin accounts (OANDA). */
+  marginUsed?: number | null;
+  marginAvailable?: number | null;
+  /** 0–1+; 1.0 means margin closeout. */
+  marginCloseoutPercent?: number | null;
+  /** Account-level margin rate (the lowest leverage the account allows), if set. */
+  marginRate?: number | null;
+  hedgingEnabled?: boolean | null;
 }
 
 export interface BrokerPosition {
@@ -61,6 +77,10 @@ export interface BrokerPosition {
   unrealizedPlpc: number | null;
   unrealizedIntradayPl: number | null;
   unrealizedIntradayPlpc: number | null;
+  /** Long and short open at the same time on a hedging account (only the net is managed). */
+  hedged?: boolean;
+  /** Account-currency value of a 1.0 price move per unit (CFDs: quote → home conversion). */
+  multiplier?: number | null;
 }
 
 export interface BrokerOrder {
@@ -87,6 +107,16 @@ export interface BrokerOrder {
   expiredAt: number | null;
   failedAt: number | null;
   extendedHours: boolean;
+  /** Broker's reason for a cancel/reject/expiry, when it gives one (e.g. "INSUFFICIENT_MARGIN"). */
+  statusReason?: string | null;
+  /**
+   * Broker-reported realized P&L of this order's fills, net of commission,
+   * financing and fees, in account currency (OANDA). Preferred over a value
+   * computed from prices.
+   */
+  realizedPl?: number | null;
+  /** A broker-managed order attached to a position (stop loss / take profit). */
+  dependent?: boolean;
 }
 
 /** One message from the broker's order/trade update stream. */
@@ -101,6 +131,8 @@ export interface BrokerTradeUpdate {
   price: number | null;
   /** Execution quantity of this fill (fill/partial_fill only). */
   qty: number | null;
+  /** Broker-reported realized P&L of this fill, net of costs, in account currency (OANDA). */
+  realizedPl?: number | null;
 }
 
 export interface BrokerAsset {
@@ -114,6 +146,26 @@ export interface BrokerAsset {
   shortable: boolean;
   easyToBorrow: boolean;
   fractionable: boolean;
+}
+
+/** Tradeable-instrument facts (OANDA). */
+export interface BrokerInstrument {
+  symbol: string;
+  displayName: string;
+  /** CURRENCY | CFD | METAL */
+  type: string;
+  /** Decimal places prices are quoted with. Orders must not carry more. */
+  displayPrecision: number;
+  /** Price of one pip = 10^pipLocation. */
+  pipLocation: number;
+  /** Decimal places allowed in order units (0 = whole units). */
+  unitsPrecision: number;
+  minUnits: number;
+  maxOrderUnits: number | null;
+  /** Fraction of position value required as margin (0.05 = 20:1). */
+  marginRate: number;
+  baseCurrency: string;
+  quoteCurrency: string;
 }
 
 export interface BrokerClock {
@@ -176,6 +228,11 @@ export interface SubmitOrderParams {
   limitPrice?: number | null;
   stopPrice?: number | null;
   positionIntent?: PositionIntent | null;
+  /**
+   * A stop loss the broker attaches to the position this order opens, so the
+   * position stays protected while this server is down (OANDA stopLossOnFill).
+   */
+  protectiveStop?: { price: number; clientOrderId: string } | null;
 }
 
 export interface StreamStatus {
@@ -225,9 +282,17 @@ export type Unsubscribe = () => void;
 
 /** Broker abstraction (spec §70). Everything else is broker-independent. */
 export interface BrokerAdapter {
-  readonly name: 'ALPACA';
+  readonly name: BrokerName;
+  readonly venue: Venue;
   readonly env: TradingEnvironment;
   readonly endpoint: string;
+  /**
+   * 'exchange': the calendar is the broker's official exchange calendar.
+   * 'configured': sessions come from this installation's configured trading
+   * window (OANDA instruments trade around the clock; the strategy's session
+   * is a choice, not an exchange fact).
+   */
+  readonly calendarSource: 'exchange' | 'configured';
 
   getAccount(): Promise<BrokerAccount>;
   getPositions(): Promise<BrokerPosition[]>;
@@ -245,6 +310,16 @@ export interface BrokerAdapter {
   getOptionContract(symbol: string): Promise<BrokerOptionContract | null>;
   getClock(): Promise<BrokerClock>;
   getCalendar(startDate: string, endDate: string): Promise<BrokerCalendarDay[]>;
+
+  /** Tradeable instruments for this account (CFD brokers). */
+  getInstruments?(): Promise<BrokerInstrument[]>;
+  /**
+   * Account-currency value of a 1.0 price move on one unit of `symbol`
+   * (quote → home currency), or null while unknown. CFD brokers only.
+   */
+  homeFactor?(symbol: string): number | null;
+  /** Broker-specific sanity warning that the account doesn't match the environment (paper vs live). */
+  environmentWarning?(account: BrokerAccount): string | null;
 
   /** Start the order/trade update stream and deliver every update to `handler`. */
   subscribeTradeUpdates(handler: (update: BrokerTradeUpdate) => void): Unsubscribe;

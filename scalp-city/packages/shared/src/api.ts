@@ -32,6 +32,8 @@ export interface ManualOrderRequest {
   stopPrice?: number | null;
   /** 'open' adds to/creates a position; 'close' reduces an existing one. */
   intent: 'open' | 'close';
+  /** CFD opens: a protective stop placed at the broker together with the order. */
+  stopLoss?: number | null;
 }
 
 export interface OrderPreview {
@@ -40,6 +42,12 @@ export interface OrderPreview {
   estimatedPrice: number | null;
   estimatedNotional: number | null;
   buyingPower: number | null;
+  /** CFD: estimated margin the order needs, and the account's margin available. */
+  estimatedMargin: number | null;
+  marginAvailable: number | null;
+  /** CFD opens with a stop: loss if the stop is hit (account currency). */
+  riskAtStop: number | null;
+  currency: string | null;
   /** Estimated notional as % of equity. */
   riskPct: number | null;
   risk: RiskDecisionView;

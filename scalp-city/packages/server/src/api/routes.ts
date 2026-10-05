@@ -5,6 +5,7 @@ import {
   aggregateBars,
   atr,
   ema,
+  isOandaSymbol,
   maskAccountNumber,
   parseOccSymbol,
   TIMEFRAMES,
@@ -31,16 +32,23 @@ import { HttpError, parse, requireAuth } from './http.js';
 const bool = z.boolean();
 const positive = z.number().finite().positive();
 
-const ManualOrderSchema = z.object({
-  symbol: z.string().trim().toUpperCase().regex(/^[A-Z0-9.]{1,21}$/),
-  assetClass: z.enum(['us_equity', 'us_option']),
-  side: z.enum(['buy', 'sell']),
-  qty: z.number().int().positive().max(100_000),
-  type: z.enum(['market', 'limit', 'stop', 'stop_limit']),
-  limitPrice: positive.nullable().optional(),
-  stopPrice: positive.nullable().optional(),
-  intent: z.enum(['open', 'close']),
-});
+const ManualOrderSchema = z
+  .object({
+    symbol: z.string().trim().toUpperCase().regex(/^[A-Z0-9._]{1,25}$/),
+    assetClass: z.enum(['us_equity', 'us_option', 'cfd']),
+    side: z.enum(['buy', 'sell']),
+    qty: z.number().finite().positive().max(100_000_000),
+    type: z.enum(['market', 'limit', 'stop', 'stop_limit']),
+    limitPrice: positive.nullable().optional(),
+    stopPrice: positive.nullable().optional(),
+    intent: z.enum(['open', 'close']),
+    stopLoss: positive.nullable().optional(),
+  })
+  .superRefine((r, ctx) => {
+    if (r.assetClass !== 'cfd' && !Number.isInteger(r.qty)) ctx.addIssue({ code: 'custom', path: ['qty'], message: 'quantity must be a whole number' });
+    if (r.assetClass !== 'cfd' && r.qty > 100_000) ctx.addIssue({ code: 'custom', path: ['qty'], message: 'quantity too large' });
+    if (r.stopLoss != null && (r.assetClass !== 'cfd' || r.intent !== 'open')) ctx.addIssue({ code: 'custom', path: ['stopLoss'], message: 'a stop loss can only be attached to a CFD order that opens a position' });
+  });
 
 const RiskLimitsPatch = z
   .object({
@@ -70,7 +78,14 @@ function actorOf(s: { username: string }): string {
 }
 
 /** Contract multiplier and underlying for a manual order symbol. */
-function instrumentInfo(req: ManualOrderRequest): { multiplier: number; underlying: string } {
+function instrumentInfo(req: ManualOrderRequest, cfdFactor: (symbol: string) => number | null): { multiplier: number; underlying: string } {
+  if (req.assetClass === 'cfd') {
+    if (!isOandaSymbol(req.symbol)) throw new HttpError(400, 'BAD_SYMBOL', 'not an OANDA instrument name (e.g. XAU_USD)');
+    const f = cfdFactor(req.symbol);
+    if (f === null) throw new HttpError(409, 'NO_CONVERSION', `no currency conversion rate for ${req.symbol} yet — try again in a few seconds`);
+    return { multiplier: f, underlying: req.symbol };
+  }
+  if (isOandaSymbol(req.symbol)) throw new HttpError(400, 'BAD_SYMBOL', 'OANDA instruments trade as CFD/FX');
   if (req.assetClass === 'us_option') {
     const occ = parseOccSymbol(req.symbol);
     if (!occ) throw new HttpError(400, 'BAD_SYMBOL', 'not a valid OCC option symbol');
@@ -78,6 +93,11 @@ function instrumentInfo(req: ManualOrderRequest): { multiplier: number; underlyi
   }
   if (parseOccSymbol(req.symbol)) throw new HttpError(400, 'BAD_SYMBOL', 'option symbol submitted as equity');
   return { multiplier: 1, underlying: req.symbol };
+}
+
+/** Time in force for a manual ticket: CFD market orders fill-or-kill, CFD limits rest for the day. */
+function manualTif(r: ManualOrderRequest): 'day' | 'fok' {
+  return r.assetClass === 'cfd' && r.type === 'market' ? 'fok' : 'day';
 }
 
 export function registerRoutes(fastify: FastifyInstance, app: App): void {
@@ -358,8 +378,14 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
     requireConfigured();
     const r = parse(ManualOrderSchema, req.body) as ManualOrderRequest;
     const c = ctx();
-    const { multiplier, underlying } = instrumentInfo(r);
+    if ((r.assetClass === 'cfd') !== (c.venue === 'oanda')) {
+      throw new HttpError(400, 'WRONG_BROKER', c.venue === 'oanda' ? 'this installation trades through OANDA — use an OANDA instrument (CFD/FX)' : 'CFD/FX instruments need BROKER=oanda');
+    }
+    const { multiplier, underlying } = instrumentInfo(r, (s) => c.instruments.homeFactor(s));
     const warnings: string[] = [];
+    if (r.assetClass === 'cfd' && r.intent === 'open' && !r.stopLoss) {
+      warnings.push('No stop loss: this position will have no broker-side protection if Scalp City goes offline.');
+    }
     if (r.assetClass === 'us_option') {
       c.marketData.watchOptions('manual', [r.symbol]);
       if (!c.marketData.status().optionsRealtimeNbbo) warnings.push('Options quotes come from the INDICATIVE feed — not the real NBBO.');
@@ -369,6 +395,9 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
       if (r.assetClass === 'us_option') {
         const q = c.marketData.optionQuote(r.symbol);
         estimatedPrice = (r.side === 'buy' ? q?.ask : q?.bid) ?? q?.mid ?? null;
+      } else if (r.assetClass === 'cfd') {
+        const st = c.marketData.state(r.symbol);
+        estimatedPrice = (r.side === 'buy' ? st?.ask : st?.bid) ?? null;
       } else {
         const st = c.marketData.state(r.symbol);
         estimatedPrice = (r.side === 'buy' ? st?.ask : st?.bid) ?? st?.last ?? null;
@@ -378,6 +407,8 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
     const estimatedNotional = estimatedPrice === null ? null : estimatedPrice * r.qty * multiplier;
     const equity = c.account.account?.equity ?? null;
     const isOpt = r.assetClass === 'us_option';
+    const isCfd = r.assetClass === 'cfd';
+    const marginRate = isCfd ? c.instruments.marginRate(r.symbol, c.account.account) : null;
     const risk = await c.orders.previewRisk({
       workerId: null,
       source: 'MANUAL',
@@ -387,13 +418,13 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
       underlying,
       assetClass: r.assetClass,
       side: r.side,
-      positionIntent: isOpt ? (r.intent === 'open' ? (r.side === 'buy' ? 'buy_to_open' : 'sell_to_open') : r.side === 'sell' ? 'sell_to_close' : 'buy_to_close') : null,
+      positionIntent: isOpt || isCfd ? (r.intent === 'open' ? (r.side === 'buy' ? 'buy_to_open' : 'sell_to_open') : r.side === 'sell' ? 'sell_to_close' : 'buy_to_close') : null,
       type: r.type,
-      timeInForce: 'day',
+      timeInForce: manualTif(r),
       qty: r.qty,
       limitPrice: r.limitPrice ?? null,
       stopPrice: r.stopPrice ?? null,
-      meta: { multiplier },
+      meta: { multiplier, protectiveStop: r.stopLoss ? { price: r.stopLoss } : null },
       actor: actorOf(s),
     });
     const token = randomBytes(24).toString('base64url');
@@ -406,6 +437,10 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
       estimatedPrice,
       estimatedNotional,
       buyingPower: isOpt ? (c.account.account?.optionsBuyingPower ?? null) : (c.account.account?.buyingPower ?? null),
+      estimatedMargin: isCfd && estimatedNotional !== null && marginRate !== null ? estimatedNotional * marginRate : null,
+      marginAvailable: c.account.account?.marginAvailable ?? null,
+      riskAtStop: isCfd && r.stopLoss && estimatedPrice !== null ? r.qty * Math.abs(estimatedPrice - r.stopLoss) * multiplier : null,
+      currency: c.account.account?.currency ?? null,
       riskPct: estimatedNotional !== null && equity ? (estimatedNotional / equity) * 100 : null,
       risk,
       previewToken: token,
@@ -426,8 +461,9 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
     const c = ctx();
     if (p.env !== c.env) throw new HttpError(409, 'ENV_CHANGED', 'environment changed since the preview');
     const r = p.request;
-    const { multiplier, underlying } = instrumentInfo(r);
+    const { multiplier, underlying } = instrumentInfo(r, (sym) => c.instruments.homeFactor(sym));
     const isOpt = r.assetClass === 'us_option';
+    const isCfd = r.assetClass === 'cfd';
     const order = await c.orders.submit({
       workerId: null,
       source: 'MANUAL',
@@ -437,13 +473,13 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
       underlying,
       assetClass: r.assetClass,
       side: r.side,
-      positionIntent: isOpt ? (r.intent === 'open' ? (r.side === 'buy' ? 'buy_to_open' : 'sell_to_open') : r.side === 'sell' ? 'sell_to_close' : 'buy_to_close') : null,
+      positionIntent: isOpt || isCfd ? (r.intent === 'open' ? (r.side === 'buy' ? 'buy_to_open' : 'sell_to_open') : r.side === 'sell' ? 'sell_to_close' : 'buy_to_close') : null,
       type: r.type,
-      timeInForce: 'day',
+      timeInForce: manualTif(r),
       qty: r.qty,
       limitPrice: r.limitPrice ?? null,
       stopPrice: r.stopPrice ?? null,
-      meta: { multiplier, exitReason: r.intent === 'close' ? 'MANUAL_CLOSE' : undefined },
+      meta: { multiplier, exitReason: r.intent === 'close' ? 'MANUAL_CLOSE' : undefined, protectiveStop: r.stopLoss ? { price: r.stopLoss } : null },
       actor: actorOf(s),
     });
     return c.orders.view(order);
@@ -463,7 +499,7 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
     requireAuth(req);
     if (!ctx().configured) return [];
     const q = parse(z.object({ limit: z.coerce.number().int().min(1).max(500).default(100) }), req.query);
-    const rows = await ctx().orders.repository.listRecent(ctx().env, q.limit);
+    const rows = await ctx().orders.repository.listRecent(ctx().venue, ctx().env, q.limit);
     return rows.map((o) => ctx().orders.view(ctx().orders.get(o.id) ?? o));
   });
 
@@ -502,7 +538,7 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
     requireConfigured();
     const q = parse(
       z.object({
-        symbol: z.string().toUpperCase().regex(/^[A-Z.]{1,10}$/),
+        symbol: z.string().toUpperCase().regex(/^([A-Z.]{1,10}|[A-Z0-9]{2,12}_[A-Z0-9]{2,12})$/),
         tf: z.enum(TIMEFRAMES).default('1Min'),
         date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
       }),
@@ -532,7 +568,7 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
       ema: ema(closes, 50),
       atr: atr(tfBars, 14),
       source,
-      feedLabel: stockFeedLabel(app.config.stockFeed).label,
+      feedLabel: `${stockFeedLabel(app.config.venue === 'oanda' ? 'oanda' : app.config.stockFeed).label}${app.config.venue === 'oanda' ? ' · MID · TICK VOLUME' : ''}`,
     };
     return response;
   });
@@ -579,8 +615,8 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
   fastify.get('/api/journal', async (req) => {
     requireAuth(req);
     const q = parse(z.object({ limit: z.coerce.number().int().min(1).max(500).default(100), worker: z.string().max(64).optional() }), req.query);
-    const params: unknown[] = [ctx().env];
-    let where = 'env = $1';
+    const params: unknown[] = [ctx().env, app.config.venue];
+    let where = 'env = $1 AND venue = $2';
     if (q.worker) {
       params.push(q.worker);
       where += ` AND worker_id = $${params.length}`;

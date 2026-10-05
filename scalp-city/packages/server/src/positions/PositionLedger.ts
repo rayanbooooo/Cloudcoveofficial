@@ -1,4 +1,4 @@
-import type { DirectionOrNeutral, TradingEnvironment } from '@scalp-city/shared';
+import type { DirectionOrNeutral, TradingEnvironment, Venue } from '@scalp-city/shared';
 import type { BrokerPosition } from '../broker/types.js';
 import type { Clock } from '../core/clock.js';
 import { newId } from '../core/ids.js';
@@ -25,6 +25,7 @@ const parse = (v: any) => (v === null || v === undefined ? null : typeof v === '
 export function rowToTrade(r: any): TradeRecord {
   return {
     id: r.id,
+    venue: r.venue ?? 'alpaca',
     env: r.env,
     workerId: r.worker_id,
     strategyId: r.strategy_id,
@@ -53,6 +54,7 @@ export function rowToTrade(r: any): TradeRecord {
 
 function rowToPosition(r: any): LedgerPosition {
   return {
+    venue: r.venue ?? 'alpaca',
     env: r.env,
     symbol: r.symbol,
     workerId: r.worker_id,
@@ -78,6 +80,7 @@ export class PositionLedger {
   private trades = new Map<string, TradeRecord>();
 
   constructor(
+    private readonly venue: Venue,
     private readonly env: TradingEnvironment,
     private readonly db: Db,
     private readonly clock: Clock,
@@ -87,12 +90,12 @@ export class PositionLedger {
   async load(): Promise<void> {
     this.positions.clear();
     this.trades.clear();
-    const pos = await this.db.query('SELECT * FROM positions WHERE env = $1', [this.env]);
+    const pos = await this.db.query('SELECT * FROM positions WHERE venue = $1 AND env = $2', [this.venue, this.env]);
     for (const r of pos.rows) {
       const p = rowToPosition(r);
       if (p.qty !== 0) this.positions.set(p.symbol, p);
     }
-    const tr = await this.db.query(`SELECT * FROM trades WHERE env = $1 AND status = 'OPEN'`, [this.env]);
+    const tr = await this.db.query(`SELECT * FROM trades WHERE venue = $1 AND env = $2 AND status = 'OPEN'`, [this.venue, this.env]);
     for (const r of tr.rows) {
       const t = rowToTrade(r);
       this.trades.set(t.id, t);
@@ -120,8 +123,21 @@ export class PositionLedger {
    * Apply a broker-confirmed fill of `qty` at `price`. Must run inside the
    * caller's transaction (`q`); in-memory state is returned for the caller
    * to commit via `commit()` after the transaction succeeds.
+   *
+   * `brokerRealized`: the broker's own realized P&L for this fill, net of
+   * costs, in account currency (OANDA). When present it is used as-is —
+   * including the commission on an opening fill — instead of a figure
+   * computed from prices.
    */
-  async applyFill(q: Queryable, order: OrderRecord, qty: number, price: number, at: number, ctx: { dailyPnl: number | null }): Promise<FillEffect> {
+  async applyFill(
+    q: Queryable,
+    order: OrderRecord,
+    qty: number,
+    price: number,
+    at: number,
+    ctx: { dailyPnl: number | null; brokerRealized?: number | null },
+  ): Promise<FillEffect> {
+    const brokerRealized = ctx.brokerRealized ?? null;
     const signed = order.side === 'buy' ? qty : -qty;
     const existing = this.positions.get(order.symbol);
     const mult = order.meta.multiplier;
@@ -135,8 +151,10 @@ export class PositionLedger {
     if (!existing || existing.qty === 0) {
       // Opening a new position.
       const direction: DirectionOrNeutral = order.meta.direction ?? (signed > 0 ? 'CALL' : 'PUT');
+      const entryCost = brokerRealized !== null && brokerRealized !== 0 ? brokerRealized : null;
       const trade: TradeRecord = {
         id: newId('trd'),
+        venue: this.venue,
         env: this.env,
         workerId: order.workerId,
         strategyId: null,
@@ -150,10 +168,16 @@ export class PositionLedger {
         entryValue: qty * price * mult,
         exitValue: 0,
         multiplier: mult,
-        realizedPnl: null,
+        realizedPnl: entryCost,
         signalId: order.signalId,
         signalSnapshot: order.meta.signal ?? null,
-        riskSnapshot: { positionNotional: qty * price * mult, dailyPnlBefore: order.meta.dailyPnlBefore ?? ctx.dailyPnl },
+        riskSnapshot: {
+          positionNotional: qty * price * mult,
+          dailyPnlBefore: order.meta.dailyPnlBefore ?? ctx.dailyPnl,
+          exitPlan: order.meta.exitPlan ?? null,
+          protectiveStop: order.meta.protectiveStop ?? null,
+          riskAtStop: order.meta.riskAtStop ?? null,
+        },
         exitReason: null,
         dailyPnlBefore: order.meta.dailyPnlBefore ?? ctx.dailyPnl,
         dailyPnlAfter: null,
@@ -163,8 +187,8 @@ export class PositionLedger {
       };
       await q.query(
         `INSERT INTO trades(id, env, worker_id, strategy_id, symbol, underlying, asset_class, direction, status, qty_opened, qty_closed,
-           entry_value, exit_value, multiplier, realized_pnl, signal_id, signal_snapshot, risk_snapshot, daily_pnl_before, trading_day, opened_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'OPEN',$9,0,$10,0,$11,NULL,$12,$13,$14,$15,$16,$17)`,
+           entry_value, exit_value, multiplier, realized_pnl, signal_id, signal_snapshot, risk_snapshot, daily_pnl_before, trading_day, opened_at, venue)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'OPEN',$9,0,$10,0,$11,$18,$12,$13,$14,$15,$16,$17,$19)`,
         [
           trade.id,
           trade.env,
@@ -183,9 +207,12 @@ export class PositionLedger {
           trade.dailyPnlBefore,
           trade.tradingDay,
           iso(at),
+          trade.realizedPnl,
+          this.venue,
         ],
       );
       pos = {
+        venue: this.venue,
         env: this.env,
         symbol: order.symbol,
         workerId: order.workerId,
@@ -201,7 +228,7 @@ export class PositionLedger {
         updatedAt: at,
       };
       opened = trade;
-      await this.event(q, trade.id, 'ENTRY_FILL', order.id, qty, price, null, at);
+      await this.event(q, trade.id, 'ENTRY_FILL', order.id, qty, price, entryCost, at);
       tradeUpserts.push(trade);
     } else if (Math.sign(existing.qty) === Math.sign(signed)) {
       // Adding to the position.
@@ -210,9 +237,11 @@ export class PositionLedger {
       pos = { ...existing, qty: existing.qty + signed, avgPrice: avg, updatedAt: at };
       const cached = this.openTrade(existing.tradeId);
       if (cached) {
-        const trade = { ...cached, qtyOpened: cached.qtyOpened + qty, entryValue: cached.entryValue + qty * price * mult };
-        await q.query('UPDATE trades SET qty_opened = $2, entry_value = $3 WHERE id = $1', [trade.id, trade.qtyOpened, trade.entryValue]);
-        await this.event(q, trade.id, 'ENTRY_FILL', order.id, qty, price, null, at);
+        const entryCost = brokerRealized !== null && brokerRealized !== 0 ? brokerRealized : null;
+        const realizedPnl = entryCost === null ? cached.realizedPnl : (cached.realizedPnl ?? 0) + entryCost;
+        const trade = { ...cached, qtyOpened: cached.qtyOpened + qty, entryValue: cached.entryValue + qty * price * mult, realizedPnl };
+        await q.query('UPDATE trades SET qty_opened = $2, entry_value = $3, realized_pnl = $4 WHERE id = $1', [trade.id, trade.qtyOpened, trade.entryValue, trade.realizedPnl]);
+        await this.event(q, trade.id, 'ENTRY_FILL', order.id, qty, price, entryCost, at);
         tradeUpserts.push(trade);
       }
     } else {
@@ -220,7 +249,8 @@ export class PositionLedger {
       const absOld = Math.abs(existing.qty);
       const closeQty = Math.min(qty, absOld);
       const dir = existing.qty > 0 ? 1 : -1;
-      realized = (price - existing.avgPrice) * closeQty * mult * dir;
+      // Prefer the broker's own figure (account currency, net of costs); else derive it from prices.
+      realized = brokerRealized ?? (price - existing.avgPrice) * closeQty * existing.multiplier * dir;
       const remaining = existing.qty + Math.sign(signed) * closeQty;
       const cached = this.openTrade(existing.tradeId);
       if (cached) {
@@ -266,14 +296,14 @@ export class PositionLedger {
 
     if (pos) {
       await q.query(
-        `INSERT INTO positions(env, symbol, worker_id, trade_id, asset_class, underlying, direction, qty, avg_price, multiplier, external, opened_at, updated_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-         ON CONFLICT (env, symbol) DO UPDATE SET worker_id = EXCLUDED.worker_id, trade_id = EXCLUDED.trade_id, direction = EXCLUDED.direction,
+        `INSERT INTO positions(env, symbol, worker_id, trade_id, asset_class, underlying, direction, qty, avg_price, multiplier, external, opened_at, updated_at, venue)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+         ON CONFLICT (venue, env, symbol) DO UPDATE SET worker_id = EXCLUDED.worker_id, trade_id = EXCLUDED.trade_id, direction = EXCLUDED.direction,
            qty = EXCLUDED.qty, avg_price = EXCLUDED.avg_price, external = EXCLUDED.external, updated_at = EXCLUDED.updated_at`,
-        [pos.env, pos.symbol, pos.workerId, pos.tradeId, pos.assetClass, pos.underlying, pos.direction, pos.qty, pos.avgPrice, pos.multiplier, pos.external, iso(pos.openedAt), iso(pos.updatedAt)],
+        [pos.env, pos.symbol, pos.workerId, pos.tradeId, pos.assetClass, pos.underlying, pos.direction, pos.qty, pos.avgPrice, pos.multiplier, pos.external, iso(pos.openedAt), iso(pos.updatedAt), this.venue],
       );
     } else {
-      await q.query('DELETE FROM positions WHERE env = $1 AND symbol = $2', [this.env, order.symbol]);
+      await q.query('DELETE FROM positions WHERE venue = $1 AND env = $2 AND symbol = $3', [this.venue, this.env, order.symbol]);
     }
     return { symbol: order.symbol, opened, closed, realized, position: pos, tradeUpserts, tradeDeletes };
   }
@@ -299,6 +329,7 @@ export class PositionLedger {
   async adoptExternal(bp: BrokerPosition): Promise<LedgerPosition> {
     const now = this.clock.now();
     const pos: LedgerPosition = {
+      venue: this.venue,
       env: this.env,
       symbol: bp.symbol,
       workerId: null,
@@ -308,16 +339,16 @@ export class PositionLedger {
       direction: 'NEUTRAL',
       qty: bp.side === 'long' ? bp.qty : -bp.qty,
       avgPrice: bp.avgEntryPrice,
-      multiplier: bp.assetClass === 'us_option' ? 100 : 1,
+      multiplier: bp.multiplier ?? (bp.assetClass === 'us_option' ? 100 : 1),
       external: true,
       openedAt: now,
       updatedAt: now,
     };
     await this.db.query(
-      `INSERT INTO positions(env, symbol, worker_id, trade_id, asset_class, underlying, direction, qty, avg_price, multiplier, external, opened_at, updated_at)
-       VALUES ($1,$2,NULL,NULL,$3,NULL,'NEUTRAL',$4,$5,$6,true,$7,$7)
-       ON CONFLICT (env, symbol) DO UPDATE SET qty = EXCLUDED.qty, avg_price = EXCLUDED.avg_price, external = true, worker_id = NULL, trade_id = NULL, updated_at = EXCLUDED.updated_at`,
-      [this.env, pos.symbol, pos.assetClass, pos.qty, pos.avgPrice, pos.multiplier, iso(now)],
+      `INSERT INTO positions(env, symbol, worker_id, trade_id, asset_class, underlying, direction, qty, avg_price, multiplier, external, opened_at, updated_at, venue)
+       VALUES ($1,$2,NULL,NULL,$3,NULL,'NEUTRAL',$4,$5,$6,true,$7,$7,$8)
+       ON CONFLICT (venue, env, symbol) DO UPDATE SET qty = EXCLUDED.qty, avg_price = EXCLUDED.avg_price, external = true, worker_id = NULL, trade_id = NULL, updated_at = EXCLUDED.updated_at`,
+      [this.env, pos.symbol, pos.assetClass, pos.qty, pos.avgPrice, pos.multiplier, iso(now), this.venue],
     );
     this.positions.set(pos.symbol, pos);
     return pos;
@@ -336,7 +367,7 @@ export class PositionLedger {
         );
         this.trades.delete(existing.tradeId);
       }
-      await this.db.query('DELETE FROM positions WHERE env = $1 AND symbol = $2', [this.env, symbol]);
+      await this.db.query('DELETE FROM positions WHERE venue = $1 AND env = $2 AND symbol = $3', [this.venue, this.env, symbol]);
       this.positions.delete(symbol);
       return;
     }
@@ -345,7 +376,7 @@ export class PositionLedger {
       await this.adoptExternal(bp);
       return;
     }
-    await this.db.query('UPDATE positions SET qty = $3, avg_price = $4, updated_at = $5 WHERE env = $1 AND symbol = $2', [this.env, symbol, qty, bp.avgEntryPrice, iso(now)]);
+    await this.db.query('UPDATE positions SET qty = $4, avg_price = $5, updated_at = $6 WHERE venue = $1 AND env = $2 AND symbol = $3', [this.venue, this.env, symbol, qty, bp.avgEntryPrice, iso(now)]);
     this.positions.set(symbol, { ...existing, qty, avgPrice: bp.avgEntryPrice, updatedAt: now });
   }
 }

@@ -1,6 +1,6 @@
-import type { Instrument, StrategyParams, Timeframe, WorkerConfigView } from '@scalp-city/shared';
+import type { Instrument, StrategyParams, Timeframe, Venue, WorkerConfigView } from '@scalp-city/shared';
 import type { Db } from '../db/db.js';
-import { STRATEGIES, WORKERS } from './definitions.js';
+import { STRATEGIES, WORKERS, workerDefaults } from './definitions.js';
 
 interface StoredWorkerConfig {
   entrySlippagePct: number;
@@ -33,21 +33,27 @@ export class WorkerRepository {
         options: w.options,
       };
       await this.db.query(
-        `INSERT INTO workers(id, name, symbol, strategy_id, timeframe, instrument, allow_short, config, sort_order)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT (id) DO NOTHING`,
-        [w.id, w.name, w.symbol, w.strategyId, w.timeframe, w.instrument, w.allowShort, JSON.stringify(config), w.sortOrder],
+        `INSERT INTO workers(id, name, symbol, strategy_id, timeframe, instrument, allow_short, config, sort_order, venue)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT (id) DO NOTHING`,
+        [w.id, w.name, w.symbol, w.strategyId, w.timeframe, w.instrument, w.allowShort, JSON.stringify(config), w.sortOrder, w.venue],
       );
     }
   }
 
-  async list(): Promise<WorkerConfigView[]> {
+  /** Workers of one venue (broker), in display order. */
+  async list(venue: Venue): Promise<WorkerConfigView[]> {
     const { rows } = await this.db.query(
       `SELECT w.*, s.name AS strategy_name, s.params AS strategy_params
          FROM workers w JOIN strategies s ON s.id = w.strategy_id
+        WHERE w.venue = $1
         ORDER BY w.sort_order, w.id`,
+      [venue],
     );
     return rows.map((r: any) => {
-      const cfg = parse(r.config) as StoredWorkerConfig;
+      const stored = parse(r.config) as StoredWorkerConfig;
+      // Fields added in later versions get their defaults; stored values always win.
+      const d = workerDefaults(r.id);
+      const cfg = { ...stored, limits: { ...d.limits, ...stored.limits }, exits: { ...d.exits, ...stored.exits }, options: { ...d.options, ...stored.options } };
       return {
         id: r.id,
         name: r.name,

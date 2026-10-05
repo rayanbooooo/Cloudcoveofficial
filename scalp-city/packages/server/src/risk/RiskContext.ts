@@ -2,6 +2,7 @@ import { parseOccSymbol, timeframeMinutes, type TradingEnvironment } from '@scal
 import type { AccountService } from '../account/AccountService.js';
 import type { BrokerAdapter } from '../broker/types.js';
 import type { Clock } from '../core/clock.js';
+import type { InstrumentCatalog } from '../market/InstrumentCatalog.js';
 import type { MarketCalendar } from '../market/MarketCalendar.js';
 import type { MarketDataService } from '../marketdata/MarketDataService.js';
 import type { MarketDataProvider } from '../marketdata/types.js';
@@ -14,7 +15,7 @@ import type { LiveGate } from '../safety/LiveGate.js';
 import type { Reconciler } from '../safety/Reconciler.js';
 import type { WorkerManager } from '../workers/WorkerManager.js';
 import type { WorkerStatsService } from '../workers/WorkerStats.js';
-import type { ProposedOrder, RiskState } from './RiskEngine.js';
+import type { CfdMarket, ProposedOrder, RiskState } from './RiskEngine.js';
 import type { RiskSettings } from './RiskSettings.js';
 
 interface Prefetched {
@@ -31,6 +32,7 @@ export interface LiveRiskContextDeps {
   account: AccountService;
   calendar: MarketCalendar;
   marketData: MarketDataService;
+  instruments: InstrumentCatalog;
   ledger: PositionLedger;
   selector: ContractSelector;
   controls: Controls;
@@ -65,6 +67,7 @@ export class LiveRiskContext implements RiskContextProvider {
 
   async prefetch(o: ProposedOrder): Promise<Prefetched> {
     const asset = o.assetClass === 'us_equity' ? await this.asset(o.symbol) : null;
+    if (o.assetClass === 'cfd') await this.d.instruments.ensure();
     const signalUsed = o.signalId ? await this.d.signalHasOrder(o.signalId, o.orderId) : false;
     let contract: Prefetched['contract'] = null;
     if (o.assetClass === 'us_option') {
@@ -91,7 +94,23 @@ export class LiveRiskContext implements RiskContextProvider {
     // The reference price is always the live quote at evaluation time.
     let referencePrice = o.referencePrice;
     let optionMarket: RiskState['optionMarket'] = null;
-    if (o.assetClass === 'us_option') {
+    let cfd: CfdMarket | null = null;
+    if (o.assetClass === 'cfd') {
+      const st = d.marketData.state(o.symbol);
+      referencePrice = (o.side === 'buy' ? st?.ask : st?.bid) ?? st?.last ?? null;
+      const spec = d.instruments.get(o.symbol);
+      const acct = d.account.account;
+      cfd = {
+        listed: spec !== null,
+        tradeable: st?.tradeable ?? null,
+        unitsPrecision: spec?.unitsPrecision ?? null,
+        minUnits: spec?.minUnits ?? null,
+        maxOrderUnits: spec?.maxOrderUnits ?? null,
+        marginRate: d.instruments.marginRate(o.symbol, acct),
+        homeFactor: d.instruments.homeFactor(o.symbol),
+        marginAvailable: acct?.marginAvailable ?? null,
+      };
+    } else if (o.assetClass === 'us_option') {
       const q = d.marketData.optionQuote(o.symbol);
       referencePrice = (o.side === 'buy' ? q?.ask : q?.bid) ?? q?.mid ?? null;
       optionMarket = {
@@ -124,6 +143,8 @@ export class LiveRiskContext implements RiskContextProvider {
       now,
       env: d.env,
       limits: d.riskSettings.get(),
+      currency: d.account.account?.currency ?? null,
+      cfd,
       controls: { autotrading: d.controls.autotrading, entriesPaused: d.controls.entriesPaused, killSwitch: d.controls.killSwitch.active },
       live: { serverLockOpen: d.liveGate.serverLockOpen, armed: d.liveGate.armed },
       breakers: d.breakers.tripped(),

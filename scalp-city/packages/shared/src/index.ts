@@ -4,6 +4,7 @@ export * from './indicators/core.js';
 export * from './indicators/aggregate.js';
 export * from './signal.js';
 export * from './occ.js';
+export * from './instruments.js';
 export * from './views.js';
 export * from './ws.js';
 export * from './api.js';

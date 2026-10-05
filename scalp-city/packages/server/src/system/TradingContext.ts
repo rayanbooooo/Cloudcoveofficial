@@ -1,18 +1,21 @@
 import { DateTime } from 'luxon';
-import { maskAccountNumber, type HaltReason, type SystemPhase, type TradingEnvironment } from '@scalp-city/shared';
+import { maskAccountNumber, type HaltReason, type SystemPhase, type TradingEnvironment, type Venue } from '@scalp-city/shared';
 import { AccountService } from '../account/AccountService.js';
 import type { AuditLog } from '../audit/AuditLog.js';
 import { AlpacaBrokerAdapter } from '../broker/alpaca/AlpacaBrokerAdapter.js';
+import { OandaBrokerAdapter } from '../broker/oanda/OandaBrokerAdapter.js';
 import type { BrokerAdapter, StreamStatus } from '../broker/types.js';
-import { assertLiveEndpoints, tradingBaseUrl, tradingStreamUrl, type AppConfig } from '../config/env.js';
+import { assertLiveEndpoints, hasCredentials, oandaStreamUrl, tradingBaseUrl, tradingStreamUrl, type AppConfig } from '../config/env.js';
 import type { Clock } from '../core/clock.js';
 import { sleep } from '../core/clock.js';
 import type { EventBus } from '../core/eventBus.js';
 import type { Logger } from '../core/logger.js';
 import type { Db } from '../db/db.js';
+import { InstrumentCatalog } from '../market/InstrumentCatalog.js';
 import { MarketCalendar } from '../market/MarketCalendar.js';
 import { AlpacaMarketDataProvider } from '../marketdata/alpaca/AlpacaMarketDataProvider.js';
 import { MarketDataService } from '../marketdata/MarketDataService.js';
+import { OandaMarketDataProvider } from '../marketdata/oanda/OandaMarketDataProvider.js';
 import type { MarketDataProvider } from '../marketdata/types.js';
 import { ContractSelector } from '../options/ContractSelector.js';
 import { OrderEngine } from '../orders/OrderEngine.js';
@@ -39,7 +42,7 @@ export interface TradingContextOptions {
   settings: SettingsStore;
   clock: Clock;
   logger: Logger;
-  /** Test seams. Production always uses the Alpaca implementations. */
+  /** Test seams. Production uses the configured broker's implementations. */
   brokerFactory?: (env: TradingEnvironment) => BrokerAdapter;
   providerFactory?: (env: TradingEnvironment) => MarketDataProvider;
   /** Faster loops for tests. */
@@ -53,12 +56,14 @@ export interface TradingContextOptions {
  */
 export class TradingContext {
   readonly env: TradingEnvironment;
+  readonly venue: Venue;
   readonly configured: boolean;
   phase: SystemPhase = 'BOOTING';
   phaseDetail = '';
   broker!: BrokerAdapter;
   provider!: MarketDataProvider;
   calendar!: MarketCalendar;
+  instruments!: InstrumentCatalog;
   marketData!: MarketDataService;
   account!: AccountService;
   ledger!: PositionLedger;
@@ -82,51 +87,81 @@ export class TradingContext {
 
   constructor(private readonly o: TradingContextOptions) {
     this.env = o.env;
-    const creds = o.config.credentials[o.env];
-    this.configured = creds !== null;
-    this.timeline = new Timeline(o.env, o.db, o.bus, o.clock, o.logger.child({ component: 'timeline' }));
+    this.venue = o.config.venue;
+    this.configured = hasCredentials(o.config, o.env);
+    this.timeline = new Timeline(this.venue, o.env, o.db, o.bus, o.clock, o.logger.child({ component: 'timeline' }));
     this.alerts = new Alerts(o.bus, o.clock);
-    this.riskSettings = new RiskSettings(o.settings, o.config.riskDefaults);
-    this.breakers = new CircuitBreakers(o.env, o.settings, o.bus, o.audit, this.alerts, this.timeline, o.clock, o.logger.child({ component: 'breakers' }));
+    this.riskSettings = new RiskSettings(o.settings, o.config.riskDefaults, this.venue);
+    this.breakers = new CircuitBreakers(o.env, o.settings, o.bus, o.audit, this.alerts, this.timeline, o.clock, o.logger.child({ component: 'breakers' }), this.venue);
     this.controls = new Controls(o.env, o.settings, o.bus, o.audit, this.timeline, this.alerts, o.clock, o.logger.child({ component: 'controls' }));
     this.liveGate = new LiveGate(o.env, o.config.liveTradingEnabled, o.audit, this.timeline, o.bus, o.clock, o.logger.child({ component: 'live-gate' }));
-    if (!creds) return;
+    if (!this.configured) return;
 
     if (o.env === 'live') assertLiveEndpoints(o.config);
-    const log = o.logger.child({ env: o.env });
-    this.broker =
-      o.brokerFactory?.(o.env) ??
-      new AlpacaBrokerAdapter({
-        env: o.env,
-        baseUrl: tradingBaseUrl(o.config, o.env),
-        streamUrl: tradingStreamUrl(o.config, o.env),
-        credentials: creds,
-        logger: log,
-        clock: o.clock,
-      });
-    this.provider =
-      o.providerFactory?.(o.env) ??
-      new AlpacaMarketDataProvider({
-        dataUrl: o.config.endpoints.data,
-        dataStreamUrl: o.config.endpoints.dataStream,
-        stockFeed: o.config.stockFeed,
-        optionsFeed: o.config.optionsFeed,
-        credentials: creds,
-        logger: log,
-      });
+    const log = o.logger.child({ env: o.env, broker: this.venue });
+    if (this.venue === 'oanda') {
+      const creds = o.config.oanda.credentials[o.env]!;
+      this.broker =
+        o.brokerFactory?.(o.env) ??
+        new OandaBrokerAdapter({
+          env: o.env,
+          apiUrl: tradingBaseUrl(o.config, o.env),
+          streamUrl: oandaStreamUrl(o.config, o.env),
+          credentials: creds,
+          session: o.config.oanda.session,
+          skipUsHolidays: o.config.oanda.skipUsHolidays,
+          instruments: o.config.symbols,
+          logger: log,
+          clock: o.clock,
+        });
+      this.provider =
+        o.providerFactory?.(o.env) ??
+        new OandaMarketDataProvider({
+          apiUrl: tradingBaseUrl(o.config, o.env),
+          streamUrl: oandaStreamUrl(o.config, o.env),
+          credentials: creds,
+          logger: log,
+          clock: o.clock,
+        });
+    } else {
+      const creds = o.config.credentials[o.env]!;
+      this.broker =
+        o.brokerFactory?.(o.env) ??
+        new AlpacaBrokerAdapter({
+          env: o.env,
+          baseUrl: tradingBaseUrl(o.config, o.env),
+          streamUrl: tradingStreamUrl(o.config, o.env),
+          credentials: creds,
+          logger: log,
+          clock: o.clock,
+        });
+      this.provider =
+        o.providerFactory?.(o.env) ??
+        new AlpacaMarketDataProvider({
+          dataUrl: o.config.endpoints.data,
+          dataStreamUrl: o.config.endpoints.dataStream,
+          stockFeed: o.config.stockFeed,
+          optionsFeed: o.config.optionsFeed,
+          credentials: creds,
+          logger: log,
+        });
+    }
     this.calendar = new MarketCalendar(this.broker, o.db, o.clock, log.child({ component: 'calendar' }), o.config.thresholds.maxClockSkewMs);
+    this.instruments = new InstrumentCatalog(this.broker, o.clock, log.child({ component: 'instruments' }));
     this.marketData = new MarketDataService(this.provider, this.calendar, o.bus, o.clock, log.child({ component: 'market-data' }), {
       env: o.env,
       symbols: o.config.symbols,
       maxDataAgeMs: o.config.thresholds.maxDataAgeMs,
       maxOptionQuoteAgeMs: o.config.thresholds.maxOptionQuoteAgeMs,
       paperAllowIndicativeOptions: o.config.paperAllowIndicativeOptions,
+      // OANDA's official minute candle is fetched just after the minute; give it time to land.
+      barGraceMs: this.venue === 'oanda' ? 9000 : undefined,
     });
     this.account = new AccountService(this.broker, o.db, o.bus, o.clock, log.child({ component: 'account' }), { env: o.env });
-    this.ledger = new PositionLedger(o.env, o.db, o.clock, log.child({ component: 'ledger' }));
+    this.ledger = new PositionLedger(this.venue, o.env, o.db, o.clock, log.child({ component: 'ledger' }));
     this.selector = new ContractSelector(this.broker, this.provider, o.clock, log.child({ component: 'options' }));
-    this.stats = new WorkerStatsService(o.env, o.db, o.clock);
-    this.signals = new SignalRepository(o.env, o.db);
+    this.stats = new WorkerStatsService(this.venue, o.env, o.db, o.clock);
+    this.signals = new SignalRepository(this.venue, o.env, o.db);
 
     let engine: OrderEngine | null = null;
     const risk = new LiveRiskContext({
@@ -137,6 +172,7 @@ export class TradingContext {
       account: this.account,
       calendar: this.calendar,
       marketData: this.marketData,
+      instruments: this.instruments,
       ledger: this.ledger,
       selector: this.selector,
       controls: this.controls,
@@ -150,6 +186,7 @@ export class TradingContext {
       allowedUnderlyings: o.config.symbols,
     });
     engine = new OrderEngine({
+      venue: this.venue,
       env: o.env,
       broker: this.broker,
       db: o.db,
@@ -167,6 +204,7 @@ export class TradingContext {
       },
       dailyPnl: () => this.account.dayPnl(),
       onFills: () => this.account.requestRefresh(),
+      currency: () => this.account.account?.currency ?? null,
     });
     this.orders = engine;
     this.reconciler = new Reconciler(o.env, this.account, this.ledger, this.orders, this.breakers, o.audit, this.timeline, this.alerts, o.bus, o.clock, log.child({ component: 'reconciler' }), () =>
@@ -175,6 +213,7 @@ export class TradingContext {
 
     this.workers = new WorkerManager(
       {
+        venue: this.venue,
         env: o.env,
         marketData: this.marketData,
         calendar: this.calendar,
@@ -194,6 +233,10 @@ export class TradingContext {
         maxPositionNotional: () => this.riskSettings.get().maxPositionNotional,
         maxContracts: () => this.riskSettings.get().maxContracts,
         maxShares: () => this.riskSettings.get().maxShares,
+        instruments: this.instruments,
+        account: () => this.account.account,
+        maxOrderNotional: () => this.riskSettings.get().maxOrderNotional,
+        maxRiskPerTrade: () => this.riskSettings.get().maxRiskPerTrade,
       },
       new WorkerRepository(o.db),
       o.audit,
@@ -214,7 +257,11 @@ export class TradingContext {
     await this.breakers.load();
     await this.timeline.load(DateTime.fromMillis(this.o.clock.now(), { zone: 'America/New_York' }).startOf('day').toMillis());
     if (!this.configured) {
-      this.setPhase('NOT_CONFIGURED', `No Alpaca credentials configured for ${this.env.toUpperCase()}. Set them in .env and restart.`);
+      const what =
+        this.venue === 'oanda'
+          ? `No OANDA ${this.env === 'live' ? 'live (fxTrade) token and account id' : 'practice token and account id'} configured`
+          : `No Alpaca credentials configured for ${this.env.toUpperCase()}`;
+      this.setPhase('NOT_CONFIGURED', `${what}. Set them in the server environment and restart.`);
       return;
     }
     await this.workers.load();
@@ -243,6 +290,7 @@ export class TradingContext {
     this.setPhase('ACCOUNT_SYNC', 'retrieving account from broker');
     await this.account.refreshAccount();
     if (this.account.environmentWarning && this.env === 'live') throw new Error(this.account.environmentWarning);
+    if (this.instruments.supported && !this.instruments.loaded) await this.instruments.start();
 
     this.setPhase('POSITION_SYNC', 'retrieving positions from broker');
     await this.account.refreshPositions();
@@ -363,7 +411,12 @@ export class TradingContext {
     }
     if (this.calendar) {
       const m = this.calendar.status();
-      if (!m.isOpen) out.push({ code: 'MARKET_CLOSED', message: `Market ${m.label.replace('_', ' ').toLowerCase()}` });
+      if (!m.isOpen) {
+        out.push({
+          code: 'MARKET_CLOSED',
+          message: this.broker.calendarSource === 'configured' ? 'Outside the trading session' : `Market ${m.label.replace('_', ' ').toLowerCase()}`,
+        });
+      }
       else {
         const stale = this.o.config.symbols.filter((s) => this.marketData.freshness(s).stale);
         if (stale.length) out.push({ code: 'DATA_STALE', message: `Market data stale: ${stale.join(', ')}` });
@@ -388,6 +441,7 @@ export class TradingContext {
     this.reconciler.stop();
     this.account.stop();
     this.calendar.stop();
+    this.instruments.stop();
     await Promise.allSettled([this.marketData.stop(), this.broker.close()]);
     await this.o.audit.flush();
   }

@@ -1,7 +1,8 @@
-import type { AssetClass, DirectionOrNeutral, TradingEnvironment } from '@scalp-city/shared';
+import type { AssetClass, DirectionOrNeutral, TradingEnvironment, Venue } from '@scalp-city/shared';
 
 /** What Scalp City believes it holds in one symbol (signed qty: + long, − short). */
 export interface LedgerPosition {
+  venue: Venue;
   env: TradingEnvironment;
   symbol: string;
   workerId: string | null;
@@ -21,6 +22,7 @@ export interface LedgerPosition {
 /** One round trip in the trade journal (spec §117). */
 export interface TradeRecord {
   id: string;
+  venue: Venue;
   env: TradingEnvironment;
   workerId: string | null;
   strategyId: string | null;

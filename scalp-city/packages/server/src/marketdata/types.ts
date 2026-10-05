@@ -16,7 +16,7 @@ export interface StockSnapshot {
   symbol: string;
   prevClose: number | null;
   latestTrade: { price: number; t: number } | null;
-  latestQuote: { bid: number; ask: number; t: number } | null;
+  latestQuote: { bid: number; ask: number; t: number; tradeable?: boolean } | null;
 }
 
 export interface OptionSnapshot {

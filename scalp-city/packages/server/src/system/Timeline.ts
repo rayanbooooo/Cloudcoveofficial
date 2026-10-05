@@ -1,4 +1,4 @@
-import type { AlertCode, AlertView, Severity, TimelineEvent, TimelineKind, TradingEnvironment } from '@scalp-city/shared';
+import type { AlertCode, AlertView, Severity, TimelineEvent, TimelineKind, TradingEnvironment, Venue } from '@scalp-city/shared';
 import type { Clock } from '../core/clock.js';
 import type { EventBus } from '../core/eventBus.js';
 import { newId } from '../core/ids.js';
@@ -22,6 +22,7 @@ export class Timeline {
   private readonly max = 500;
 
   constructor(
+    private readonly venue: Venue,
     private readonly env: TradingEnvironment,
     private readonly db: Db,
     private readonly bus: EventBus,
@@ -31,8 +32,8 @@ export class Timeline {
 
   async load(sinceMs: number): Promise<void> {
     const { rows } = await this.db.query(
-      `SELECT * FROM timeline_events WHERE env = $1 AND ts >= $2 ORDER BY ts DESC LIMIT $3`,
-      [this.env, iso(sinceMs), this.max],
+      `SELECT * FROM timeline_events WHERE venue = $1 AND env = $2 AND ts >= $3 ORDER BY ts DESC LIMIT $4`,
+      [this.venue, this.env, iso(sinceMs), this.max],
     );
     this.events = rows
       .map((r: Record<string, unknown>) => ({
@@ -64,8 +65,8 @@ export class Timeline {
     this.bus.emit('TIMELINE', e);
     void this.db
       .query(
-        `INSERT INTO timeline_events(id, env, ts, kind, severity, worker_id, symbol, title, detail) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-        [e.id, this.env, iso(e.ts), e.kind, e.severity, e.workerId, e.symbol, e.title, e.detail],
+        `INSERT INTO timeline_events(id, env, ts, kind, severity, worker_id, symbol, title, detail, venue) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+        [e.id, this.env, iso(e.ts), e.kind, e.severity, e.workerId, e.symbol, e.title, e.detail, this.venue],
       )
       .catch((err) => this.logger.warn({ err }, 'timeline persist failed'));
     return e;

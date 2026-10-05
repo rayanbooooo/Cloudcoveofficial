@@ -117,7 +117,7 @@ describe('LIVE activation (spec §3, §124, §125)', () => {
     const clock = new ManualClock(Date.UTC(2026, 9, 5, 15));
     const bus = new EventBus(logger);
     const audit = new AuditLog(db, logger, clock);
-    const g = new LiveGate(env, serverLockOpen, audit, new Timeline(env, db, bus, clock, logger), bus, clock, logger);
+    const g = new LiveGate(env, serverLockOpen, audit, new Timeline('alpaca', env, db, bus, clock, logger), bus, clock, logger);
     return { g, audit, db };
   }
   const allOk = Object.fromEntries(

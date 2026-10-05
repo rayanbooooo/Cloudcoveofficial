@@ -281,6 +281,37 @@ CREATE TABLE timeline_events (
 CREATE INDEX timeline_events_env_ts_idx ON timeline_events(env, ts DESC);
 `,
   },
+  {
+    version: 2,
+    name: 'multiple brokers (venues) and CFD instruments',
+    sql: /* sql */ `
+-- Every trading record belongs to a venue (broker). Rows written before this
+-- migration were all Alpaca. Switching brokers never mixes the two books.
+ALTER TABLE workers ADD COLUMN venue text NOT NULL DEFAULT 'alpaca' CHECK (venue IN ('alpaca', 'oanda'));
+ALTER TABLE workers DROP CONSTRAINT workers_instrument_check;
+ALTER TABLE workers ADD CONSTRAINT workers_instrument_check CHECK (instrument IN ('OPTIONS', 'EQUITY', 'CFD'));
+
+ALTER TABLE orders ADD COLUMN venue text NOT NULL DEFAULT 'alpaca' CHECK (venue IN ('alpaca', 'oanda'));
+DROP INDEX orders_env_state_idx;
+DROP INDEX orders_env_created_idx;
+CREATE INDEX orders_venue_env_state_idx ON orders(venue, env, state);
+CREATE INDEX orders_venue_env_created_idx ON orders(venue, env, created_at DESC);
+
+ALTER TABLE positions ADD COLUMN venue text NOT NULL DEFAULT 'alpaca' CHECK (venue IN ('alpaca', 'oanda'));
+ALTER TABLE positions DROP CONSTRAINT positions_pkey;
+ALTER TABLE positions ADD PRIMARY KEY (venue, env, symbol);
+
+ALTER TABLE trades ADD COLUMN venue text NOT NULL DEFAULT 'alpaca' CHECK (venue IN ('alpaca', 'oanda'));
+DROP INDEX trades_env_day_idx;
+CREATE INDEX trades_venue_env_day_idx ON trades(venue, env, trading_day);
+
+ALTER TABLE timeline_events ADD COLUMN venue text NOT NULL DEFAULT 'alpaca';
+DROP INDEX timeline_events_env_ts_idx;
+CREATE INDEX timeline_events_venue_env_ts_idx ON timeline_events(venue, env, ts DESC);
+
+ALTER TABLE risk_events ADD COLUMN venue text NOT NULL DEFAULT 'alpaca';
+`,
+  },
 ];
 
 export async function migrate(db: Db, log?: (msg: string) => void): Promise<number> {

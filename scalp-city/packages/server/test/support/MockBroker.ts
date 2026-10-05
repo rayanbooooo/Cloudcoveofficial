@@ -27,6 +27,8 @@ export type SubmitBehavior = 'accept' | 'reject' | 'timeout-created' | 'timeout-
  */
 export class MockBroker implements BrokerAdapter {
   readonly name = 'ALPACA' as const;
+  readonly venue = 'alpaca' as const;
+  readonly calendarSource = 'exchange' as const;
   readonly endpoint = 'mock://broker';
   account: BrokerAccount = defaultAccount();
   positions: BrokerPosition[] = [];

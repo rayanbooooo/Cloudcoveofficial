@@ -1,10 +1,10 @@
-import type { TradingEnvironment } from '@scalp-city/shared';
-import type { SignalState } from '@scalp-city/shared';
+import type { SignalState, TradingEnvironment, Venue } from '@scalp-city/shared';
 import { iso, type Db } from '../db/db.js';
 
 /** Persists setups once they become meaningful (CHARGING or better) and their outcome. */
 export class SignalRepository {
   constructor(
+    private readonly venue: Venue,
     private readonly env: TradingEnvironment,
     private readonly db: Db,
   ) {}
@@ -42,8 +42,8 @@ export class SignalRepository {
   /** Setups that already produced an entry order (so a replay can't re-trigger them). */
   async consumed(workerId: string, sinceMs: number): Promise<Set<string>> {
     const { rows } = await this.db.query<{ signal_id: string }>(
-      `SELECT signal_id FROM orders WHERE env = $1 AND worker_id = $2 AND purpose = 'ENTRY' AND signal_id IS NOT NULL AND created_at >= $3`,
-      [this.env, workerId, iso(sinceMs)],
+      `SELECT signal_id FROM orders WHERE venue = $1 AND env = $2 AND worker_id = $3 AND purpose = 'ENTRY' AND signal_id IS NOT NULL AND created_at >= $4`,
+      [this.venue, this.env, workerId, iso(sinceMs)],
     );
     return new Set(rows.map((r) => r.signal_id));
   }

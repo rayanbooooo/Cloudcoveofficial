@@ -1,4 +1,4 @@
-import type { TradingEnvironment } from '@scalp-city/shared';
+import type { TradingEnvironment, Venue } from '@scalp-city/shared';
 import { iso, ms, n, type Db, type Queryable } from '../db/db.js';
 import type { OrderRecord } from './types.js';
 
@@ -8,6 +8,7 @@ const parse = (v: any) => (v === null || v === undefined ? null : typeof v === '
 export function rowToOrder(r: any): OrderRecord {
   return {
     id: r.id,
+    venue: r.venue ?? 'alpaca',
     env: r.env,
     clientOrderId: r.client_order_id,
     brokerOrderId: r.broker_order_id,
@@ -57,8 +58,8 @@ export class OrderRepository {
       await this.db.query(
         `INSERT INTO orders(id, env, client_order_id, broker_order_id, worker_id, source, purpose, signal_id, trade_id, symbol, underlying,
            asset_class, side, position_intent, type, time_in_force, qty, limit_price, stop_price, state, broker_status, filled_qty,
-           filled_avg_price, rejected_by, reject_reason, error_message, risk, meta, created_at, submitted_at, updated_at, filled_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32)`,
+           filled_avg_price, rejected_by, reject_reason, error_message, risk, meta, created_at, submitted_at, updated_at, filled_at, venue)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30,$31,$32,$33)`,
         this.params(o),
       );
     } catch (err) {
@@ -101,6 +102,7 @@ export class OrderRepository {
       iso(o.submittedAt),
       iso(o.updatedAt),
       iso(o.filledAt),
+      o.venue,
     ];
   }
 
@@ -167,17 +169,17 @@ export class OrderRepository {
   }
 
   /** Orders that may still change (plus today's), for the in-memory working set. */
-  async loadWorkingSet(env: TradingEnvironment, sinceMs: number): Promise<OrderRecord[]> {
+  async loadWorkingSet(venue: Venue, env: TradingEnvironment, sinceMs: number): Promise<OrderRecord[]> {
     const { rows } = await this.db.query(
-      `SELECT * FROM orders WHERE env = $1 AND (created_at >= $2 OR state NOT IN ('FILLED','CANCELED','REJECTED','EXPIRED'))
+      `SELECT * FROM orders WHERE venue = $1 AND env = $2 AND (created_at >= $3 OR state NOT IN ('FILLED','CANCELED','REJECTED','EXPIRED'))
        ORDER BY created_at ASC`,
-      [env, iso(sinceMs)],
+      [venue, env, iso(sinceMs)],
     );
     return rows.map(rowToOrder);
   }
 
-  async listRecent(env: TradingEnvironment, limit: number): Promise<OrderRecord[]> {
-    const { rows } = await this.db.query(`SELECT * FROM orders WHERE env = $1 ORDER BY created_at DESC LIMIT $2`, [env, limit]);
+  async listRecent(venue: Venue, env: TradingEnvironment, limit: number): Promise<OrderRecord[]> {
+    const { rows } = await this.db.query(`SELECT * FROM orders WHERE venue = $1 AND env = $2 ORDER BY created_at DESC LIMIT $3`, [venue, env, limit]);
     return rows.map(rowToOrder);
   }
 

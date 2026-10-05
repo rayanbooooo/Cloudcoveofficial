@@ -17,6 +17,7 @@ export const LIMITS: RiskLimits = {
   maxPriceDeviationPct: 5,
   noEntriesBeforeCloseMinutes: 10,
   pdtGuard: true,
+  maxRiskPerTrade: 25,
 };
 
 export function account(over: Partial<BrokerAccount> = {}): BrokerAccount {
@@ -63,8 +64,8 @@ export function workerConfig(over: Partial<WorkerConfigView> = {}): WorkerConfig
     entrySlippagePct: 2,
     entryTimeoutSec: 20,
     params: DEFAULT_STRATEGY_PARAMS,
-    limits: { maxTradesPerDay: 5, maxContracts: 20, maxShares: 100, maxPositionNotional: 5000, dailyLossLimit: 200, dailyGoal: 500 },
-    exits: { takeProfitPct: 25, stopLossPct: 15, exitOnVwapLoss: true, maxHoldMinutes: 30, flattenBeforeCloseMinutes: 15, cooldownBars: 3 },
+    limits: { maxTradesPerDay: 5, maxContracts: 20, maxShares: 100, maxPositionNotional: 5000, dailyLossLimit: 200, dailyGoal: 500, riskPerTrade: 10 },
+    exits: { takeProfitPct: 25, stopLossPct: 15, stopAtr: 1.5, targetAtr: 2, exitOnVwapLoss: true, maxHoldMinutes: 30, flattenBeforeCloseMinutes: 15, cooldownBars: 3 },
     options: { minDte: 0, maxDte: 3, strikeOffset: 0, maxSpreadPct: 10, maxSpreadAbs: 0.15, minVolume: 100, minOpenInterest: 100, minBidSize: 1 },
     ...over,
   };

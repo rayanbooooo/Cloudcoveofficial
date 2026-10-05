@@ -17,7 +17,7 @@ beforeEach(async () => {
   h = await createEngineHarness();
   const logger = createTestLogger();
   account = new AccountService(h.broker, h.db, h.bus, h.clock, logger, { env: 'paper' });
-  const timeline = new Timeline('paper', h.db, h.bus, h.clock, logger);
+  const timeline = new Timeline('alpaca', 'paper', h.db, h.bus, h.clock, logger);
   const alerts = new Alerts(h.bus, h.clock);
   breakers = new CircuitBreakers('paper', new SettingsStore(h.db), h.bus, h.audit, alerts, timeline, h.clock, logger);
   await breakers.load();
