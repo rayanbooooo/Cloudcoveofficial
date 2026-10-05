@@ -3,7 +3,7 @@ import { useFrame } from '@react-three/fiber';
 import { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
 import { cx } from '../components/ui';
-import { money, pct, pnlClass } from '../lib/format';
+import { envLabel, money, pct, pnlClass } from '../lib/format';
 import { useStore } from '../store/store';
 import { useLabelLayer } from './labelLayer';
 import { VAULT_POSITION } from './layout';
@@ -26,6 +26,7 @@ export function Vault({ activity }: { activity: number }) {
   const labels = useLabelLayer();
   const account = useStore((s) => s.account);
   const env = useStore((s) => s.system?.env ?? 'paper');
+  const venue = useStore((s) => s.system?.venue);
   const openDrawer = useStore((s) => s.openDrawer);
   const available = !!account?.available && account.equity !== null;
   const dayPnl = available ? account!.dayPnl : null;
@@ -101,7 +102,7 @@ export function Vault({ activity }: { activity: number }) {
         >
           <div className="flex items-center justify-center gap-1.5">
             <span className="label-strong text-[8.5px] text-fg-2">VAULT</span>
-            <span className={cx('label-strong px-1 text-[8px]', env === 'live' ? 'bg-live text-white' : 'border border-dashed border-paper text-paper')}>{env.toUpperCase()}</span>
+            <span className={cx('label-strong px-1 text-[8px]', env === 'live' ? 'bg-live text-white' : 'border border-dashed border-paper text-paper')}>{envLabel(env, venue)}</span>
           </div>
           {available ? (
             <>

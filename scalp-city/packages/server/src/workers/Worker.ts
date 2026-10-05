@@ -212,8 +212,10 @@ export class Worker {
   private onSignalTransition(prev: SignalState, next: SignalState): void {
     const t = this.d.timeline;
     const base = { workerId: this.id, symbol: this.config.symbol, ts: next.barTime !== null ? this.barCloseAt(next.barTime) : undefined };
+    // CALL/PUT is options vocabulary: CFD workers go long or short.
+    const dir = (d: Parameters<typeof directionLabel>[0]) => directionLabel(d, this.config.instrument);
     if (next.fadedSetupId) {
-      t.add({ ...base, kind: 'signal', title: `${this.config.name} · setup faded`, detail: `${prev.direction} charge fell to ${next.direction === prev.direction ? next.charge : 0}%` });
+      t.add({ ...base, kind: 'signal', title: `${this.config.name} · setup faded`, detail: `${dir(prev.direction)} charge fell to ${next.direction === prev.direction ? next.charge : 0}%` });
       void this.d.signals.markFaded(next.fadedSetupId).catch(() => undefined);
     }
     if (!next.setupId) return;
@@ -225,7 +227,7 @@ export class Worker {
       }
     }
     if (next.phase !== prev.phase || newSetup) {
-      if (next.phase === 'READY') t.add({ ...base, kind: 'signal', severity: 'success', title: `${this.config.name} · ${next.direction} signal reached ${next.charge}%`, detail: 'READY — subject to risk checks' });
+      if (next.phase === 'READY') t.add({ ...base, kind: 'signal', severity: 'success', title: `${this.config.name} · ${dir(next.direction)} signal reached ${next.charge}%`, detail: 'READY — subject to risk checks' });
       if (next.phase === 'CHARGING' || next.phase === 'READY') void this.d.signals.upsert(this.id, this.config.symbol, next).catch((err) => this.d.logger.warn({ err }, 'signal persist failed'));
     }
   }
@@ -751,9 +753,25 @@ export class Worker {
     }
   }
 
+  /** The broker-held stop for a CFD position, the plan's target, and the loss if the stop is hit. */
+  private cfdProtection(pos: LedgerPosition): { stopPrice: number | null; targetPrice: number | null; riskAtStop: number | null } {
+    const sign = pos.qty > 0 ? 1 : -1;
+    const stop = this.d.orders.protectiveStops().find((o) => o.workerId === this.id && o.symbol === pos.symbol)?.stopPrice ?? null;
+    const plan = this.planFor(pos);
+    const f = this.d.instruments.homeFactor(pos.symbol);
+    return {
+      stopPrice: stop,
+      targetPrice: plan ? pos.avgPrice + sign * plan.targetDistance : null,
+      riskAtStop: stop !== null && f !== null ? Math.abs(pos.qty) * (pos.avgPrice - stop) * sign * f : null,
+    };
+  }
+
   private unmanagedWarning(): string | null {
     const pos = this.position();
     if (!pos) return null;
+    if (pos.assetClass === 'cfd' && this.d.clock.now() - pos.openedAt > 15_000 && this.cfdProtection(pos).stopPrice === null) {
+      return 'NO BROKER-SIDE STOP — this position is only protected while Scalp City is running. Close it, or add a stop at the broker.';
+    }
     if (this.d.controls.killSwitch.active) return 'KILL SWITCH — position is not being managed. Use FLATTEN ALL or close manually.';
     if (!this.d.controls.autotrading) return 'AUTOTRADING OFF — no automated stop/target on this position. Use PAUSE ENTRIES to keep exits active.';
     if (!this.autotradeEnabled) return 'Worker OFF — no automated stop/target on this position.';
@@ -790,6 +808,7 @@ export class Worker {
     if (pos) {
       const { price } = this.markPrice(pos);
       const occ = parseOccSymbol(pos.symbol);
+      const cfd = pos.assetClass === 'cfd' ? this.cfdProtection(pos) : null;
       position = {
         symbol: pos.symbol,
         assetClass: pos.assetClass,
@@ -802,6 +821,10 @@ export class Worker {
         openedAt: pos.openedAt,
         tradeId: pos.tradeId ?? '',
         option: occ ? { underlying: occ.root, expiration: occ.expiration, type: occ.type, strike: occ.strike } : null,
+        stopPrice: cfd?.stopPrice ?? null,
+        stopSource: cfd?.stopPrice != null ? 'broker' : null,
+        targetPrice: cfd?.targetPrice ?? null,
+        riskAtStop: cfd?.riskAtStop ?? null,
       };
     }
     return {

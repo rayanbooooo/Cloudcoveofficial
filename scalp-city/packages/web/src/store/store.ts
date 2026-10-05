@@ -15,6 +15,7 @@ import type {
   TimelineEvent,
   WorkerView,
 } from '@scalp-city/shared';
+import { setDisplayCurrency } from '../lib/format';
 
 export type DrawerId = 'account' | 'positions' | 'orders' | 'risk' | 'health' | 'journal' | 'trade' | 'settings' | 'audit' | 'live';
 
@@ -91,6 +92,7 @@ export function onBars(symbol: string, fn: BarListener): () => void {
 }
 
 function applySnapshot(s: Snapshot): Partial<State> {
+  setDisplayCurrency(s.account.currency);
   const orders: Record<string, OrderView> = {};
   for (const o of s.orders) orders[o.id] = o;
   const workers: Record<string, WorkerView> = {};
@@ -169,6 +171,7 @@ export const useStore = create<State>((set, get) => ({
         set({ ...base, positions: msg.data.positions });
         return 'ok';
       case 'account.updated':
+        setDisplayCurrency(msg.data.currency);
         set({ ...base, account: msg.data });
         return 'ok';
       case 'risk.updated':

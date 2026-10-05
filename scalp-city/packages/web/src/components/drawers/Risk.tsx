@@ -1,14 +1,22 @@
 import { useEffect, useState } from 'react';
 import type { RiskLimits, RiskLimitsChangePreview } from '@scalp-city/shared';
 import { Api, ApiError } from '../../lib/api';
-import { age, dateTimeET, humanize, money } from '../../lib/format';
+import { age, dateTimeET, displayCurrency, humanize, money, qtyStr } from '../../lib/format';
 import { useStore } from '../../store/store';
 import { Btn, Check, cx, ErrorText, Field, inputCls, Money, Row } from '../ui';
 
-const LIMIT_FIELDS: { key: keyof RiskLimits; label: string; unit?: string }[] = [
-  { key: 'maxDailyLoss', label: 'Max daily loss', unit: '$' },
-  { key: 'maxPositionNotional', label: 'Max position', unit: '$' },
-  { key: 'maxOrderNotional', label: 'Max order value', unit: '$' },
+/** `unit: 'ccy'` is the account currency (USD, GBP, …). */
+interface LimitField {
+  key: keyof RiskLimits;
+  label: string;
+  unit?: string;
+  hint?: string;
+}
+
+const OPTIONS_LIMIT_FIELDS: LimitField[] = [
+  { key: 'maxDailyLoss', label: 'Max daily loss', unit: 'ccy' },
+  { key: 'maxPositionNotional', label: 'Max position', unit: 'ccy' },
+  { key: 'maxOrderNotional', label: 'Max order value', unit: 'ccy' },
   { key: 'maxContracts', label: 'Max contracts' },
   { key: 'maxShares', label: 'Max shares' },
   { key: 'maxConcurrentPositions', label: 'Max positions' },
@@ -18,9 +26,25 @@ const LIMIT_FIELDS: { key: keyof RiskLimits; label: string; unit?: string }[] = 
   { key: 'noEntriesBeforeCloseMinutes', label: 'No entries before close', unit: 'min' },
 ];
 
+/** OANDA CFDs: sizes are units, so the per-order limits are money values and the per-trade loss at the stop is capped. */
+const CFD_LIMIT_FIELDS: LimitField[] = [
+  { key: 'maxDailyLoss', label: 'Max daily loss', unit: 'ccy', hint: 'New entries stop for the day once the account is down this much.' },
+  { key: 'maxRiskPerTrade', label: 'Max loss per trade', unit: 'ccy', hint: 'The most an order may lose if its stop is hit. Orders that would risk more are refused.' },
+  { key: 'maxPositionNotional', label: 'Max position value', unit: 'ccy', hint: 'Open exposure per instrument (units × price, in account currency).' },
+  { key: 'maxOrderNotional', label: 'Max order value', unit: 'ccy' },
+  { key: 'maxConcurrentPositions', label: 'Max positions' },
+  { key: 'maxTradesPerDay', label: 'Max trades / day' },
+  { key: 'maxOrdersPerMinute', label: 'Max orders / minute' },
+  { key: 'maxPriceDeviationPct', label: 'Max price deviation', unit: '%' },
+  { key: 'noEntriesBeforeCloseMinutes', label: 'No entries before session end', unit: 'min' },
+];
+
 function LimitsEditor() {
   const risk = useStore((s) => s.risk);
   const live = useStore((s) => s.system?.env === 'live');
+  const venue = useStore((s) => s.system?.venue ?? 'alpaca');
+  useStore((s) => s.account?.currency);
+  const LIMIT_FIELDS = venue === 'oanda' ? CFD_LIMIT_FIELDS : OPTIONS_LIMIT_FIELDS;
   const [draft, setDraft] = useState<Partial<Record<keyof RiskLimits, string>>>({});
   const [preview, setPreview] = useState<RiskLimitsChangePreview | null>(null);
   const [password, setPassword] = useState('');
@@ -65,10 +89,11 @@ function LimitsEditor() {
     <div>
       <div className="grid grid-cols-2 gap-x-4 gap-y-2.5">
         {LIMIT_FIELDS.map((f) => (
-          <Field key={f.key} label={`${f.label}${f.unit ? ` (${f.unit})` : ''}`}>
+          <Field key={f.key} label={`${f.label}${f.unit ? ` (${f.unit === 'ccy' ? displayCurrency() : f.unit})` : ''}`}>
             <input
               className={inputCls}
               inputMode="decimal"
+              title={f.hint}
               placeholder={String(L[f.key])}
               value={draft[f.key] ?? ''}
               onChange={(e) => {
@@ -136,14 +161,14 @@ export function RiskDrawerBody() {
         <div className="grid grid-cols-2 gap-x-8">
           <div>
             <Row label="Daily P&L"><Money value={risk.dailyPnl} sign /></Row>
-            <Row label="Daily loss limit">−{money(risk.maxDailyLoss).replace('$', '$')}</Row>
+            <Row label="Daily loss limit">−{money(risk.maxDailyLoss)}</Row>
             <Row label="Remaining risk"><Money value={risk.remainingRisk} /></Row>
             <Row label="Open positions">{risk.openPositions} / {risk.maxPositions}</Row>
             <Row label="Open orders">{risk.openOrders}</Row>
           </div>
           <div>
             <Row label="Trades today">{risk.tradesToday} / {risk.maxTradesPerDay}</Row>
-            <Row label="Buying power"><Money value={risk.buyingPower} /></Row>
+            {system.venue === 'oanda' ? <Row label="Margin available"><Money value={risk.marginAvailable} /></Row> : <Row label="Buying power"><Money value={risk.buyingPower} /></Row>}
             <Row label="Data latency">{age(risk.dataLatencyMs)}</Row>
             <Row label="Broker">{humanize(risk.brokerStatus)}</Row>
             <Row label="Trading">
@@ -187,8 +212,8 @@ export function RiskDrawerBody() {
             <div className="label-strong text-[10.5px] text-put">{humanize(m.kind)}</div>
             <div className="num grid grid-cols-3 gap-2 text-[12px]">
               <span>{m.symbol}</span>
-              <span>Local {m.local}</span>
-              <span>Broker {m.broker}</span>
+              <span>Local {qtyStr(m.local)}</span>
+              <span>Broker {qtyStr(m.broker)}</span>
             </div>
           </div>
         ))}

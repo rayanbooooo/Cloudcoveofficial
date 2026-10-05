@@ -1,4 +1,5 @@
-import { lazy, Suspense, useEffect, useState } from 'react';
+import { lazy, Suspense } from 'react';
+import { useIsMobile } from './lib/useIsMobile';
 import { useStore } from './store/store';
 import { Modals } from './components/Modals';
 import { MarketPanel } from './components/panels/Market';
@@ -14,17 +15,6 @@ import { RiskDrawerBody } from './components/drawers/Risk';
 import { AccountDrawerBody, PositionsDrawerBody } from './components/drawers/Portfolio';
 
 const CityScene = lazy(() => import('./city/CityScene'));
-
-function useIsMobile(): boolean {
-  const [m, setM] = useState(() => window.matchMedia('(max-width: 767px)').matches);
-  useEffect(() => {
-    const mq = window.matchMedia('(max-width: 767px)');
-    const on = () => setM(mq.matches);
-    mq.addEventListener('change', on);
-    return () => mq.removeEventListener('change', on);
-  }, []);
-  return m;
-}
 
 function Loading({ label }: { label: string }) {
   return (

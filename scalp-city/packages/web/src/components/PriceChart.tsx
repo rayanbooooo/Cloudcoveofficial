@@ -6,7 +6,9 @@ import {
   CrosshairMode,
   HistogramSeries,
   LineSeries,
+  LineStyle,
   type IChartApi,
+  type IPriceLine,
   type ISeriesApi,
   type ISeriesMarkersPluginApi,
   type SeriesMarker,
@@ -14,9 +16,9 @@ import {
   type UTCTimestamp,
 } from 'lightweight-charts';
 import { useEffect, useRef, useState } from 'react';
-import { aggregateBars, atr, ema, timeframeMinutes, vwapSeries, type Bar, type Timeframe } from '@scalp-city/shared';
+import { aggregateBars, atr, ema, instrumentName, priceDecimals, timeframeMinutes, vwapSeries, type Bar, type Timeframe } from '@scalp-city/shared';
 import { Api } from '../lib/api';
-import { hmET, price } from '../lib/format';
+import { hmET, px } from '../lib/format';
 import { onBars, useStore } from '../store/store';
 import { cx } from './ui';
 
@@ -24,6 +26,14 @@ export interface ChartMarker {
   time: number;
   side: 'buy' | 'sell';
   text: string;
+}
+
+/** A horizontal level drawn across the chart (entry, broker stop, target). */
+export interface ChartLevel {
+  price: number;
+  color: string;
+  title: string;
+  dashed?: boolean;
 }
 
 const etDay = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' });
@@ -35,9 +45,27 @@ const toTime = (t: number) => Math.floor(t / 1000) as UTCTimestamp;
  * History is loaded once; live 1-minute bars then update only the last
  * candle and the last indicator points — the chart is never rebuilt per tick.
  */
-export function PriceChart({ symbol, markers = [], date, height = 300, defaultTf = '1Min' }: { symbol: string; markers?: ChartMarker[]; date?: string; height?: number; defaultTf?: Timeframe }) {
+export function PriceChart({
+  symbol,
+  markers = [],
+  levels = [],
+  date,
+  height = 300,
+  defaultTf = '1Min',
+}: {
+  symbol: string;
+  markers?: ChartMarker[];
+  levels?: ChartLevel[];
+  date?: string;
+  height?: number;
+  defaultTf?: Timeframe;
+}) {
   const ref = useRef<HTMLDivElement>(null);
   const markerRef = useRef<ISeriesMarkersPluginApi<Time> | null>(null);
+  const candleRef = useRef<ISeriesApi<'Candlestick'> | null>(null);
+  const lineRefs = useRef<IPriceLine[]>([]);
+  const tickVolume = useStore((s) => s.system?.marketData.tickVolume ?? false);
+  const decimals = priceDecimals(symbol);
   const [tf, setTf] = useState<Timeframe>(defaultTf);
   const [meta, setMeta] = useState<{ source: string; feed: string; error: string | null; atr: number | null }>({ source: '', feed: '', error: null, atr: null });
   const sessionOpen = useStore((s) => s.system?.market.sessionOpen ?? null);
@@ -53,7 +81,7 @@ export function PriceChart({ symbol, markers = [], date, height = 300, defaultTf
       crosshair: { mode: CrosshairMode.Normal, vertLine: { color: 'rgba(140,160,190,0.35)', width: 1, labelBackgroundColor: '#131b28' }, horzLine: { color: 'rgba(140,160,190,0.35)', width: 1, labelBackgroundColor: '#131b28' } },
       rightPriceScale: { borderColor: 'rgba(140,160,190,0.13)' },
       timeScale: { borderColor: 'rgba(140,160,190,0.13)', timeVisible: true, secondsVisible: false, tickMarkFormatter: (t: Time) => hmET((t as number) * 1000) },
-      localization: { timeFormatter: (t: Time) => hmET((t as number) * 1000), priceFormatter: (p: number) => price(p) },
+      localization: { timeFormatter: (t: Time) => hmET((t as number) * 1000), priceFormatter: (p: number) => px(symbol, p) },
     });
     const candles: ISeriesApi<'Candlestick'> = chart.addSeries(CandlestickSeries, {
       upColor: '#26c28e',
@@ -62,7 +90,10 @@ export function PriceChart({ symbol, markers = [], date, height = 300, defaultTf
       wickUpColor: '#26c28e',
       wickDownColor: '#e0455f',
       priceLineColor: 'rgba(232,238,246,0.4)',
+      priceFormat: { type: 'price', precision: decimals, minMove: Number((10 ** -decimals).toFixed(decimals)) },
     });
+    candleRef.current = candles;
+    lineRefs.current = [];
     const vwapLine = chart.addSeries(LineSeries, { color: '#ffb020', lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
     const emaLine = chart.addSeries(LineSeries, { color: '#4c8dff', lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
     const volume = chart.addSeries(HistogramSeries, { priceScaleId: 'vol', priceFormat: { type: 'volume' }, lastValueVisible: false, priceLineVisible: false });
@@ -131,10 +162,25 @@ export function PriceChart({ symbol, markers = [], date, height = 300, defaultTf
     return () => {
       disposed = true;
       markerRef.current = null;
+      candleRef.current = null;
+      lineRefs.current = [];
       off();
       chart.remove();
     };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [symbol, tf, date, sessionOpen, sessionClose]);
+
+  // Entry / stop / target lines follow the position without rebuilding the chart.
+  const levelKey = levels.map((l) => `${l.title}:${l.price}:${l.color}`).join('|');
+  useEffect(() => {
+    const series = candleRef.current;
+    if (!series) return;
+    for (const line of lineRefs.current) series.removePriceLine(line);
+    lineRefs.current = levels.map((l) =>
+      series.createPriceLine({ price: l.price, color: l.color, lineWidth: 1, lineStyle: l.dashed === false ? LineStyle.Solid : LineStyle.Dashed, axisLabelVisible: true, title: l.title }),
+    );
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [levelKey, symbol, tf, date, sessionOpen, sessionClose]);
 
   // Markers update without rebuilding the chart.
   useEffect(() => {
@@ -155,14 +201,16 @@ export function PriceChart({ symbol, markers = [], date, height = 300, defaultTf
 
   return (
     <div className="flex flex-col">
-      <div className="flex items-center gap-2 px-1 pb-1.5">
-        <span className="label-strong text-[11px] text-fg">{symbol}</span>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-1 pb-1.5">
+        <span className="label-strong text-[11px] text-fg" title={symbol}>
+          {instrumentName(symbol)}
+        </span>
         {(['1Min', '5Min', '15Min'] as Timeframe[]).map((t) => (
           <button key={t} onClick={() => setTf(t)} className={cx('label-strong rounded-[1px] px-1.5 py-[1px] text-[10px]', tf === t ? 'bg-ink-600 text-fg' : 'text-fg-3 hover:text-fg-2')}>
             {t.replace('Min', 'm')}
           </button>
         ))}
-        <span className="ml-auto flex items-center gap-3">
+        <span className="ml-auto flex flex-wrap items-center justify-end gap-x-3 gap-y-0.5">
           <span className="flex items-center gap-1">
             <span className="h-px w-3 bg-pending" />
             <span className="label">VWAP</span>
@@ -171,7 +219,8 @@ export function PriceChart({ symbol, markers = [], date, height = 300, defaultTf
             <span className="h-px w-3 bg-signal" />
             <span className="label">EMA50</span>
           </span>
-          <span className="label">ATR {meta.atr === null ? '—' : meta.atr.toFixed(2)}</span>
+          <span className="label">ATR {meta.atr === null ? '—' : meta.atr.toFixed(Math.max(2, decimals))}</span>
+          {tickVolume && <span className="label" title="Volume bars count price updates (ticks), not traded size">TICK VOL</span>}
           <span className="label !text-fg-3">{meta.source === 'historical' ? 'HISTORICAL' : meta.feed}</span>
         </span>
       </div>

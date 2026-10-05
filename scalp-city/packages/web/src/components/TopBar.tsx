@@ -22,10 +22,10 @@ export function EnvBadge({ compact }: { compact?: boolean }) {
     <button
       onClick={() => openDrawer('live')}
       className={cx('focus-ring flex h-7 items-center gap-2 rounded-[2px] px-2.5', live ? 'badge-live' : 'badge-paper')}
-      title={live ? 'LIVE — real-money account' : 'PAPER — simulated account at the broker'}
+      title={live ? 'LIVE — real-money account' : system.venue === 'oanda' ? 'PRACTICE — simulated account at OANDA' : 'PAPER — simulated account at the broker'}
     >
       {live && <span className="h-2 w-2 rounded-full bg-white pulse" />}
-      <span className="display text-[13px] tracking-[0.18em]">{live ? (compact ? 'LIVE' : 'LIVE TRADING') : 'PAPER'}</span>
+      <span className="display text-[13px] tracking-[0.18em]">{live ? (compact ? 'LIVE' : 'LIVE TRADING') : system.venue === 'oanda' ? 'PRACTICE' : 'PAPER'}</span>
       {live && !compact && (
         <span className="label-strong rounded-[1px] bg-black/30 px-1.5 py-[1px] text-[9.5px] text-white">{system.live.armed ? 'ARMED' : system.live.serverLockOpen ? 'NOT ARMED' : 'LOCKED'}</span>
       )}
@@ -65,9 +65,9 @@ export function StatusChips() {
         <span className={cx('label-strong text-[10.5px]', brokerOk ? 'text-fg' : 'text-put')}>{humanize(b.status)}</span>
         {b.accountMasked && <span className="num text-[11px] text-fg-3">{b.accountMasked}</span>}
       </Chip>
-      <Chip label="Market">
+      <Chip label={system.venue === 'oanda' ? 'Session' : 'Market'} title={system.venue === 'oanda' ? 'The trading window workers use (New York time). OANDA markets themselves trade around the clock.' : undefined}>
         <Dot status={m.isOpen ? 'ok' : 'off'} />
-        <span className={cx('label-strong text-[10.5px]', m.isOpen ? 'text-fg' : 'text-fg-2')}>{humanize(m.label)}</span>
+        <span className={cx('label-strong text-[10.5px]', m.isOpen ? 'text-fg' : 'text-fg-2')}>{system.venue === 'oanda' ? (m.isOpen ? 'OPEN' : 'CLOSED') : humanize(m.label)}</span>
         {marketCountdown && <span className="num text-[11px] text-fg-3">{m.isOpen ? `closes ${marketCountdown}` : `opens ${marketCountdown}`}</span>}
       </Chip>
       <Chip label="Data" title={`${md.stockFeedLabel}${md.stockPartialVolume ? ' — IEX carries only part of consolidated volume' : ''}`}>
@@ -150,10 +150,10 @@ export function StatusLine() {
   const autotradingOn = system.controls.autotrading && !system.controls.killSwitch.active;
   const halted = autotradingOn && !t.entriesAllowed;
   const parts = [
-    live ? 'LIVE' : 'PAPER',
+    live ? 'LIVE' : system.venue === 'oanda' ? 'PRACTICE' : 'PAPER',
     system.controls.killSwitch.active ? 'KILL SWITCH ACTIVE' : autotradingOn ? (halted ? 'AUTOTRADING HALTED' : 'AUTOTRADING ENABLED') : 'AUTOTRADING OFF',
-    `BROKER ${humanize(system.broker.status)}`,
-    `MARKET ${humanize(system.market.label)}`,
+    `${system.broker.name} ${humanize(system.broker.status)}`,
+    system.venue === 'oanda' ? `SESSION ${system.market.isOpen ? 'OPEN' : 'CLOSED'}` : `MARKET ${humanize(system.market.label)}`,
   ];
   const tone = system.controls.killSwitch.active || halted ? 'text-put' : autotradingOn ? 'text-call' : 'text-fg-2';
   return (

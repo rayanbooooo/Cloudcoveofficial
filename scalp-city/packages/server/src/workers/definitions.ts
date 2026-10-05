@@ -157,7 +157,9 @@ export const WORKERS: WorkerSeed[] = [
  * `riskPerTrade`. Defaults are deliberately small; prove them in practice.
  */
 function oandaWorkers(): WorkerSeed[] {
-  const limits = { ...baseLimits, maxTradesPerDay: 4, maxPositionNotional: 5000, dailyLossLimit: 50, dailyGoal: 100, riskPerTrade: 10 };
+  // maxPositionNotional is generous here on purpose: the global risk limits (Risk drawer)
+  // are the binding notional cap, so there is one number to tune.
+  const limits = { ...baseLimits, maxTradesPerDay: 4, maxPositionNotional: 100_000, dailyLossLimit: 50, dailyGoal: 100, riskPerTrade: 10 };
   const exits = { ...baseExits, stopAtr: 1.5, targetAtr: 2, maxHoldMinutes: 30, flattenBeforeCloseMinutes: 10, cooldownBars: 3 };
   const seed = (id: string, name: string, symbol: string, strategyId: string, sortOrder: number): WorkerSeed => ({
     venue: 'oanda',

@@ -1,8 +1,8 @@
 /**
  * DEV HARNESS: NOT A TRADING MODE.
  *
- * Runs the real server and UI against FakeAlpaca (the protocol-level fake
- * broker used by the end-to-end tests) with a synthetic market, an in-memory
+ * Runs the real server and UI against a protocol-level fake broker (the same
+ * fakes the end-to-end tests use) with a synthetic market, an in-memory
  * database and a virtual clock pinned to a regular session. It exists to
  * develop and visually check the UI without broker access.
  *
@@ -10,8 +10,9 @@
  * fake, so the UI shows the NON-STANDARD ENDPOINT warning the whole time.
  * Prices are synthetic. Nothing it shows says anything about real markets.
  *
- *   npm run demo                     # build the UI, start on http://127.0.0.1:8787
- *   DEMO_AUTOTRADE=1 npm run demo    # also switch autotrading on (fake paper account)
+ *   npm run demo                     # Alpaca-style demo (QQQ/SPY/IWM) on http://127.0.0.1:8787
+ *   DEMO_BROKER=oanda npm run demo   # OANDA-style demo: gold, NAS100, GBPUSD, EURJPY, US30
+ *   DEMO_AUTOTRADE=1 npm run demo    # also switch autotrading on (fake account)
  *
  * Hosting the demo behind a public URL (e.g. a Vercel Sandbox): set HOST=0.0.0.0,
  * PUBLIC_URL / ALLOWED_ORIGINS to that URL, COOKIE_SECURE=true and a strong
@@ -27,6 +28,7 @@ import type { Clock } from '../../src/core/clock.js';
 import { createLogger } from '../../src/core/logger.js';
 import { App } from '../../src/system/App.js';
 import { FakeAlpaca } from '../fakes/FakeAlpaca.js';
+import { FakeOanda } from '../fakes/FakeOanda.js';
 import { createPgliteDb } from '../support/pglite.js';
 import { fileURLToPath } from 'node:url';
 
@@ -40,6 +42,8 @@ const PASSWORD = process.env.DEMO_PASSWORD ?? 'scalp-city-demo';
 const SETUP = ['1', 'true', 'yes'].includes((process.env.DEMO_SETUP ?? '').toLowerCase());
 const AUTOTRADE = ['1', 'true', 'yes'].includes((process.env.DEMO_AUTOTRADE ?? '').toLowerCase());
 const START = process.env.DEMO_START ?? '11:00:30';
+const BROKER = (process.env.DEMO_BROKER ?? 'alpaca').toLowerCase();
+if (BROKER !== 'alpaca' && BROKER !== 'oanda') throw new Error(`DEMO_BROKER must be alpaca or oanda, got "${BROKER}"`);
 
 /** Real-time clock shifted into the fake session, so time flows at 1× from START. */
 class OffsetClock implements Clock {
@@ -82,7 +86,59 @@ function driftPerMinute(symbol: string, minute: number, regime: number): number 
   return regime * scale;
 }
 
+
+/**
+ * OANDA demo scenario. Each instrument gets a morning path that ends in the
+ * state the demo wants to show, so the city has variety within a minute or two:
+ * gold reverses up (long), NAS100 reverses down (short), GBPUSD leans up and
+ * builds charge, EURJPY chops (watching), US30 trends down (no cross).
+ * Fractions are of the starting price. Entirely synthetic.
+ */
+const OANDA_START: Record<string, number> = { XAU_USD: 2650, NAS100_USD: 20_500, GBP_USD: 1.3, EUR_JPY: 162, US30_USD: 43_000 };
+/** Per-minute noise as a fraction of price, so ATR (and so stop distance) is realistic for each market. */
+const OANDA_NOISE: Record<string, number> = { XAU_USD: 0.00028, NAS100_USD: 0.0004, GBP_USD: 0.00012, EUR_JPY: 0.00016, US30_USD: 0.0003 };
+
+function oandaPath(symbol: string, i: number, base: number): number {
+  const wave = Math.sin(i * 1.9) * 0.00012 + Math.sin(i * 0.7) * 0.00008;
+  const f = (x: number) => base * (1 + x);
+  switch (symbol) {
+    case 'XAU_USD': // opening range, sell-off, sharp V back above VWAP (long)
+      return i < 15 ? f(wave) : i < 78 ? f(-((i - 15) / 63) * 0.0045 + wave) : f(-0.0045 + ((i - 78) / 12) * 0.0105 + wave);
+    case 'NAS100_USD': // rally then sharp drop through VWAP (short)
+      return i < 15 ? f(wave) : i < 78 ? f(((i - 15) / 63) * 0.006 + wave) : f(0.006 - ((i - 78) / 12) * 0.0135 + wave);
+    case 'GBP_USD':
+      return i < 15 ? f(wave) : f(((i - 15) / 75) * 0.0012 + wave);
+    case 'US30_USD':
+      return i < 15 ? f(wave) : f(-((i - 15) / 75) * 0.005 + wave);
+    default:
+      return f(wave * 2 + Math.sin(i / 9) * 0.0003);
+  }
+}
+
+/** Tick volume: a quiet morning, busier into the reversal bars. */
+function oandaVolume(symbol: string, i: number): number {
+  const reversal = (symbol === 'XAU_USD' || symbol === 'NAS100_USD') && i >= 78;
+  return (reversal ? 150 : 90) + Math.round(20 * Math.abs(Math.sin(i / 3)));
+}
+
+/** Live drift per minute (fraction of price) once the demo is running. */
+function oandaDrift(symbol: string, minute: number): number {
+  switch (symbol) {
+    case 'XAU_USD':
+      return minute < 20 ? 0.0004 : 0.00002;
+    case 'NAS100_USD':
+      return minute < 20 ? -0.0005 : -0.00002;
+    case 'GBP_USD':
+      return 0.00004;
+    case 'US30_USD':
+      return -0.00008;
+    default:
+      return 0;
+  }
+}
+
 async function main(): Promise<void> {
+  if (BROKER === 'oanda') return mainOanda();
   const virtualStart = DateTime.fromISO(`${SESSION_DATE}T${START}`, { zone: NY }).toMillis();
   const clock = new OffsetClock(virtualStart);
   const fake = new FakeAlpaca({
@@ -167,6 +223,104 @@ async function main(): Promise<void> {
     '',
     '  ███ SCALP CITY · DEV HARNESS (synthetic market, fake broker, in-memory DB)',
     '  This is NOT paper trading on Alpaca and NOT live trading. No real broker is contacted.',
+    `  open        ${PUBLIC_URL}`,
+    SETUP ? `  first run   create your account in the browser with setup code ${app.setupCode}` : `  sign in     ${USER} / ${PASSWORD}`,
+    `  session     ${SESSION_DATE} from ${START} New York (virtual clock, real-time speed)`,
+    `  autotrade   ${AUTOTRADE ? 'ON (fake account)' : 'off — set DEMO_AUTOTRADE=1 to watch workers trade'}`,
+    '',
+  ];
+  for (const l of banner) console.log(l);
+
+  const shutdown = async () => {
+    clearInterval(tape);
+    await fastify.close();
+    await app.shutdown();
+    await fake.stop();
+    await db.close();
+    process.exit(0);
+  };
+  process.on('SIGINT', () => void shutdown());
+  process.on('SIGTERM', () => void shutdown());
+}
+
+
+async function mainOanda(): Promise<void> {
+  const virtualStart = DateTime.fromISO(`${SESSION_DATE}T${START}`, { zone: NY }).toMillis();
+  const clock = new OffsetClock(virtualStart);
+  const token = 'demo-harness-oanda-token-0123456789';
+  const accountId = '101-004-99999999-001';
+  const fake = new FakeOanda({
+    clock,
+    token,
+    accountId,
+    instruments: OANDA_START,
+    sessionDate: SESSION_DATE,
+    historyPath: oandaPath,
+    historyVolume: oandaVolume,
+  });
+  await fake.start();
+
+  const config = parseConfig({
+    NODE_ENV: 'development',
+    BROKER: 'oanda',
+    TRADING_ENVIRONMENT: 'paper',
+    OANDA_PRACTICE_TOKEN: token,
+    OANDA_PRACTICE_ACCOUNT_ID: accountId,
+    OANDA_PRACTICE_API_URL: fake.url,
+    OANDA_PRACTICE_STREAM_URL: fake.url,
+    SESSION_SECRET: 'demo-harness-session-secret-not-for-production',
+    DATABASE_URL: 'pglite://memory',
+    OANDA_MAX_DAILY_LOSS: '1000',
+    OANDA_MAX_RISK_PER_TRADE: '50',
+    OANDA_MAX_POSITION_NOTIONAL: '200000',
+    OANDA_MAX_ORDER_NOTIONAL: '200000',
+    OANDA_MAX_TRADES_PER_DAY: '20',
+    HOST,
+    PORT: String(PORT),
+    ALLOWED_ORIGINS: process.env.ALLOWED_ORIGINS,
+    COOKIE_SECURE: process.env.COOKIE_SECURE,
+    LOG_LEVEL: process.env.LOG_LEVEL ?? 'warn',
+  });
+  const logger = createLogger(config.logLevel, process.stdout.isTTY === true);
+  const db = await createPgliteDb();
+  const app = new App({ config, db, clock, logger });
+  await app.init();
+  if (!SETUP) {
+    await app.auth.createUser(USER, PASSWORD);
+    app.setupCode = null;
+  }
+
+  const webDist = fileURLToPath(new URL('../../../web/dist', import.meta.url));
+  const { fastify } = await buildServer(app, { webDist });
+  await fastify.listen({ host: HOST, port: PORT });
+
+  // Synthetic tape: a price update every 400 ms per instrument (one tick each), drifting per the scenario.
+  const rnd = mulberry32(20261005);
+  const startMinute = Math.floor(clock.now() / 60_000);
+  const tape = setInterval(() => {
+    const minute = Math.floor(clock.now() / 60_000) - startMinute;
+    for (const sym of Object.keys(OANDA_START)) {
+      const m = fake.mid(sym);
+      const drift = oandaDrift(sym, minute) / 150;
+      const noise = (rnd() - 0.5) * (OANDA_NOISE[sym] ?? 0.0002) * 0.9;
+      fake.tick(sym, m * (1 + drift + noise));
+    }
+  }, 400);
+
+  if (AUTOTRADE) {
+    const t = setInterval(() => {
+      const ctx = app.ctx;
+      if (!ctx?.workers) return;
+      clearInterval(t);
+      for (const w of ctx.workers.all()) ctx.workers.setEnabled(w.config.id, true, 'demo-harness');
+      ctx.controls.setAutotrading(true, 'demo-harness');
+    }, 500);
+  }
+
+  const banner = [
+    '',
+    '  ███ SCALP CITY · DEV HARNESS (synthetic market, FAKE OANDA, in-memory DB)',
+    '  This is NOT an OANDA practice account and NOT live trading. No real broker is contacted.',
     `  open        ${PUBLIC_URL}`,
     SETUP ? `  first run   create your account in the browser with setup code ${app.setupCode}` : `  sign in     ${USER} / ${PASSWORD}`,
     `  session     ${SESSION_DATE} from ${START} New York (virtual clock, real-time speed)`,

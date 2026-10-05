@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import type { JournalTradeView, StreamStatusView } from '@scalp-city/shared';
+import { directionLabel, instrumentName, type JournalTradeView, type StreamStatusView } from '@scalp-city/shared';
 import { Api, ApiError } from '../../lib/api';
-import { age, dateET, dateTimeET, humanize, money, pnlClass, price, timeET } from '../../lib/format';
+import { age, dateET, dateTimeET, envLabel, humanize, money, pnlClass, price, px, qtyStr, timeET } from '../../lib/format';
 import { serverNow, useStore } from '../../store/store';
 import { useReadiness } from './Risk';
 import { Btn, Check, cx, Dot, ErrorText, Row } from '../ui';
@@ -17,22 +17,30 @@ export function LiveDrawerBody() {
   const live = system.env === 'live';
   const L = risk.limits;
   const other = live ? 'paper' : 'live';
+  const cfd = system.venue === 'oanda';
+  const envName = envLabel(system.env, system.venue);
+  const otherName = envLabel(other, system.venue);
   return (
     <div className="flex flex-col gap-5 p-4">
       <section className={cx('border p-3', live ? 'border-live/60 bg-live/5' : 'border-paper/40')}>
         <div className="label">Environment</div>
-        <div className={cx('display mt-0.5 text-[22px]', live ? 'text-live' : 'text-paper')}>{live ? 'LIVE' : 'PAPER'}</div>
+        <div className={cx('display mt-0.5 text-[22px]', live ? 'text-live' : 'text-paper')}>{envName}</div>
+        <div className="label mt-0.5">
+          {system.broker.name.toUpperCase()}
+          {system.broker.accountMasked ? ` · ${system.broker.accountMasked}` : ''}
+          {!live && cfd ? ' · simulated money, real prices' : ''}
+        </div>
         <div className="mt-2 grid grid-cols-2 gap-x-8">
           <div>
             <Row label="Server lock">{system.live.serverLockOpen ? <span className="text-pending">OPEN</span> : 'LOCKED'}</Row>
-            <Row label="Execution">{live ? (system.live.armed ? <span className="text-live">ARMED</span> : 'NOT ARMED') : 'paper'}</Row>
+            <Row label="Execution">{live ? (system.live.armed ? <span className="text-live">ARMED</span> : 'NOT ARMED') : envName.toLowerCase()}</Row>
             <Row label="Autotrading">{system.controls.autotrading ? 'ON' : 'OFF'}</Row>
             <Row label="Kill switch">{system.controls.killSwitch.active ? <span className="text-put">ACTIVE</span> : 'READY'}</Row>
           </div>
           <div>
             <Row label="Max daily loss">−{money(L.maxDailyLoss)}</Row>
             <Row label="Max position">{money(L.maxPositionNotional)}</Row>
-            <Row label="Max contracts">{L.maxContracts}</Row>
+            {cfd ? <Row label="Max loss / trade">{money(L.maxRiskPerTrade)}</Row> : <Row label="Max contracts">{L.maxContracts}</Row>}
             <Row label="Max positions">{L.maxConcurrentPositions}</Row>
             <Row label="Max trades">{L.maxTradesPerDay}</Row>
           </div>
@@ -61,7 +69,7 @@ export function LiveDrawerBody() {
           )}
           {system.availableEnvs.includes(other) && (
             <Btn variant={other === 'live' ? 'warn' : 'outline'} onClick={() => openModal({ kind: 'switch-env', target: other })}>
-              Switch to {other.toUpperCase()}
+              Switch to {otherName}
             </Btn>
           )}
         </div>
@@ -124,18 +132,30 @@ export function HealthDrawerBody() {
       </section>
       <section>
         <div className="label mb-1.5">Streams</div>
-        <StreamRow label="Broker order stream" s={system.broker.tradeStream} />
-        <StreamRow label={`Stock data · ${md.stockFeed.toUpperCase()}`} s={md.stock} />
-        <StreamRow label={`Options data · ${md.optionsFeed.toUpperCase()}`} s={md.options} />
+        {system.venue === 'oanda' ? (
+          <>
+            <StreamRow label="OANDA transaction stream (fills, stops)" s={system.broker.tradeStream} />
+            <StreamRow label="OANDA price stream" s={md.stock} />
+          </>
+        ) : (
+          <>
+            <StreamRow label="Broker order stream" s={system.broker.tradeStream} />
+            <StreamRow label={`Stock data · ${md.stockFeed.toUpperCase()}`} s={md.stock} />
+            <StreamRow label={`Options data · ${md.optionsFeed.toUpperCase()}`} s={md.options} />
+          </>
+        )}
       </section>
       <section>
         <div className="label mb-1.5">Data freshness (max {age(md.maxDataAgeMs)})</div>
         {Object.entries(md.symbols).map(([sym, v]) => (
-          <Row key={sym} label={sym}>
+          <Row key={sym} label={instrumentName(sym)}>
             <span className={v.stale ? 'text-pending' : 'text-call'}>{v.stale ? 'STALE' : 'LIVE'}</span> <span className="text-fg-2">{age(v.ageMs)}</span>
           </Row>
         ))}
-        <div className="label mt-2">{md.stockFeedLabel} · {md.optionsFeedLabel}{md.optionsBlockReason ? ` · ${md.optionsBlockReason}` : ''}</div>
+        <div className="label mt-2">
+          {md.stockFeedLabel}
+          {system.venue === 'oanda' ? ' · mid of bid/ask · volume = tick count' : ` · ${md.optionsFeedLabel}${md.optionsBlockReason ? ` · ${md.optionsBlockReason}` : ''}`}
+        </div>
       </section>
       <section>
         <div className="label mb-1.5">Clock</div>
@@ -172,11 +192,11 @@ export function JournalDrawerBody() {
           </span>
           <span className="min-w-0 truncate">
             <span className="label-strong mr-2 text-[10.5px]" style={{ color: t.direction === 'PUT' ? 'var(--color-put)' : 'var(--color-call)' }}>
-              {t.direction}
+              {directionLabel(t.direction, t.assetClass)}
             </span>
             <span className="label-strong mr-2 text-[10.5px] text-fg">{t.workerName ?? 'MANUAL'}</span>
             <span className="num text-[11px] text-fg-2">
-              {t.qty} {t.option ? `${t.option.underlying} ${price(t.option.strike)}${t.option.type[0]!.toUpperCase()}` : t.symbol} · {price(t.entryAvgPrice)} → {price(t.exitAvgPrice)}
+              {qtyStr(t.qty)} {t.option ? `${t.option.underlying} ${price(t.option.strike)}${t.option.type[0]!.toUpperCase()}` : instrumentName(t.symbol)} · {px(t.symbol, t.entryAvgPrice)} → {px(t.symbol, t.exitAvgPrice)}
             </span>
             {t.exitReason && <span className="label ml-2">{humanize(t.exitReason)}</span>}
           </span>

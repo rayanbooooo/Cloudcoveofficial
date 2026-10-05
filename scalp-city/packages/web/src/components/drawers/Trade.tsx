@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
-import { SUPPORTED_ORDER_TYPES, type ManualOrderRequest, type OrderPreview, type OrderType, type WorkerView } from '@scalp-city/shared';
+import { instrumentName, SUPPORTED_ORDER_TYPES, type AssetClass, type ManualOrderRequest, type OrderPreview, type OrderType, type WorkerView } from '@scalp-city/shared';
 import { Api, ApiError } from '../../lib/api';
-import { countdown, humanize, money, pct, price } from '../../lib/format';
+import { countdown, displayCurrency, humanize, money, pct, price, px, qtyStr, unitsStr } from '../../lib/format';
 import { serverNow, useStore } from '../../store/store';
 import { Btn, Check, cx, ErrorText, Field, inputCls, Row, Toggle } from '../ui';
 
@@ -9,6 +9,11 @@ const seg = (active: boolean) => cx('label-strong flex-1 border px-2 py-1.5 text
 
 /** Manual order ticket (spec §55–58). Uses the same RiskEngine as the workers. */
 export function TradeDrawerBody() {
+  const venue = useStore((s) => s.system?.venue);
+  return venue === 'oanda' ? <CfdTicket /> : <EquityOptionTicket />;
+}
+
+function EquityOptionTicket() {
   const system = useStore((s) => s.system);
   const quotes = useStore((s) => s.quotes);
   const positions = useStore((s) => s.positions);
@@ -202,7 +207,7 @@ export function TradeDrawerBody() {
               key={p.symbol}
               className="num mr-2 text-[11px] text-fg-2 underline-offset-2 hover:underline"
               onClick={() => {
-                setAssetClass(p.assetClass);
+                setAssetClass(p.assetClass === 'us_option' ? 'us_option' : 'us_equity');
                 if (p.assetClass === 'us_option' && p.option) {
                   setUnderlying(p.option.underlying);
                   setOptType(p.option.type);
@@ -270,6 +275,239 @@ export function TradeDrawerBody() {
   );
 }
 
+/** Manual ticket for OANDA markets (gold, indices, FX): same RiskEngine, broker-side stop, size in units. */
+function CfdTicket() {
+  const system = useStore((s) => s.system);
+  const quotes = useStore((s) => s.quotes);
+  const workers = useStore((s) => s.workers);
+  const positions = useStore((s) => s.positions);
+  const symbols = Object.keys(quotes);
+  const [symbol, setSymbol] = useState(symbols[0] ?? 'XAU_USD');
+  const [side, setSide] = useState<'buy' | 'sell'>('buy');
+  const [intent, setIntent] = useState<'open' | 'close'>('open');
+  const [qty, setQty] = useState('');
+  const [type, setType] = useState<OrderType>('market');
+  const [limitPrice, setLimitPrice] = useState('');
+  const [stopLoss, setStopLoss] = useState('');
+  const [preview, setPreview] = useState<OrderPreview | null>(null);
+  const [result, setResult] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const live = system?.env === 'live';
+  const worker = Object.values(workers).find((w) => w.config.symbol === symbol);
+  const m = worker?.market ?? null;
+  const q = quotes[symbol];
+  const dp = m?.displayPrecision ?? 2;
+
+  const planned = () => {
+    if (!q || q.bid === null || q.ask === null || !m?.plannedStop) return null;
+    const raw = side === 'buy' ? q.ask - m.plannedStop : q.bid + m.plannedStop;
+    return Number(raw.toFixed(dp));
+  };
+
+  const req = (): ManualOrderRequest => ({
+    symbol,
+    assetClass: 'cfd' as AssetClass,
+    side,
+    qty: Number(qty),
+    type,
+    limitPrice: type === 'limit' ? Number(limitPrice) : null,
+    stopPrice: null,
+    intent,
+    stopLoss: intent === 'open' && stopLoss !== '' ? Number(stopLoss) : null,
+  });
+
+  const doPreview = async () => {
+    setBusy(true);
+    setError(null);
+    setResult(null);
+    try {
+      setPreview(await Api.previewOrder(req()));
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const submit = async () => {
+    if (!preview) return;
+    setBusy(true);
+    setError(null);
+    try {
+      const o = await Api.submitOrder(preview.previewToken);
+      setResult(`${humanize(o.state)}${o.rejectReason ? ` — ${o.rejectReason}` : ''} · ${o.side.toUpperCase()} ${qtyStr(o.qty)} ${instrumentName(o.symbol)}`);
+      setPreview(null);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  if (!system) return null;
+  const now = serverNow();
+  const ccy = displayCurrency();
+  const step = m?.unitsPrecision === null || m?.unitsPrecision === undefined ? null : 10 ** -m.unitsPrecision;
+
+  return (
+    <div className="flex flex-col gap-3 p-4">
+      <div className={cx('border px-3 py-2 text-[12px]', live ? 'border-live/60 bg-live/5 text-live' : 'border-paper/40 text-paper')}>
+        {live ? 'LIVE — orders from this ticket are real-money orders at OANDA.' : 'PRACTICE — orders go to your OANDA practice account.'} Every order passes the same risk engine as the workers.
+      </div>
+      <Field label="Market">
+        <select
+          className={inputCls}
+          value={symbol}
+          onChange={(e) => {
+            setSymbol(e.target.value);
+            setPreview(null);
+            setStopLoss('');
+          }}
+        >
+          {symbols.map((s) => (
+            <option key={s} value={s}>
+              {instrumentName(s)} · {s}
+            </option>
+          ))}
+        </select>
+      </Field>
+      {q && (
+        <div className="num flex flex-wrap gap-x-4 text-[11px] text-fg-2">
+          <span>bid {px(symbol, q.bid)}</span>
+          <span>ask {px(symbol, q.ask)}</span>
+          <span>spread {q.bid !== null && q.ask !== null ? px(symbol, q.ask - q.bid) : '—'}</span>
+          <span className={q.tradeable === false ? 'text-pending' : q.stale ? 'text-pending' : 'text-call'}>{q.tradeable === false ? 'NOT TRADEABLE' : q.stale ? 'STALE' : 'LIVE'}</span>
+        </div>
+      )}
+      <div className="grid grid-cols-2 gap-2">
+        <Field label="Direction">
+          <div className="flex gap-1">
+            <button className={seg(side === 'buy')} onClick={() => setSide('buy')}>
+              {intent === 'open' ? 'Long (buy)' : 'Buy'}
+            </button>
+            <button className={seg(side === 'sell')} onClick={() => setSide('sell')}>
+              {intent === 'open' ? 'Short (sell)' : 'Sell'}
+            </button>
+          </div>
+        </Field>
+        <Field label="Intent">
+          <div className="flex gap-1">
+            <button className={seg(intent === 'open')} onClick={() => setIntent('open')}>
+              Open
+            </button>
+            <button className={seg(intent === 'close')} onClick={() => setIntent('close')}>
+              Close
+            </button>
+          </div>
+        </Field>
+        <Field label={`Units${m?.minUnits ? ` (min ${qtyStr(m.minUnits)}${step ? `, step ${qtyStr(step)}` : ''})` : ''}`}>
+          <input className={inputCls} inputMode="decimal" value={qty} placeholder={m?.plannedUnits ? qtyStr(m.plannedUnits) : ''} onChange={(e) => setQty(e.target.value)} />
+        </Field>
+        <Field label="Order type">
+          <select className={inputCls} value={type} onChange={(e) => setType(e.target.value as OrderType)}>
+            {SUPPORTED_ORDER_TYPES.cfd.map((t) => (
+              <option key={t} value={t}>
+                {t.toUpperCase()}
+              </option>
+            ))}
+          </select>
+        </Field>
+        {type === 'limit' && (
+          <Field label="Limit price (worst price you accept)">
+            <input className={inputCls} inputMode="decimal" value={limitPrice} onChange={(e) => setLimitPrice(e.target.value)} />
+          </Field>
+        )}
+        {intent === 'open' && (
+          <Field label="Stop loss (held by OANDA)">
+            <div className="flex gap-1">
+              <input className={inputCls} inputMode="decimal" value={stopLoss} placeholder="price" onChange={(e) => setStopLoss(e.target.value)} />
+              <Btn variant="outline" className="!h-8 shrink-0" disabled={planned() === null} onClick={() => setStopLoss(String(planned()))} title="A stop 1.5 × ATR from the live price, the same distance the workers use">
+                ATR stop
+              </Btn>
+            </div>
+          </Field>
+        )}
+      </div>
+      {m?.plannedUnits ? (
+        <button className="label text-left underline-offset-2 hover:underline" onClick={() => setQty(String(m.plannedUnits))}>
+          Use the worker's size: {unitsStr(m.plannedUnits)} (risks ≤ {money(worker!.config.limits.riskPerTrade)} at its stop)
+        </button>
+      ) : null}
+      {intent === 'close' && positions.length > 0 && (
+        <div className="label">
+          Held:{' '}
+          {positions.map((p) => (
+            <button
+              key={p.symbol}
+              className="num mr-2 text-[11px] text-fg-2 underline-offset-2 hover:underline"
+              onClick={() => {
+                setSymbol(p.symbol);
+                setSide(p.side === 'long' ? 'sell' : 'buy');
+                setQty(String(p.qty));
+              }}
+            >
+              {instrumentName(p.symbol)} {p.side === 'long' ? 'LONG' : 'SHORT'} {qtyStr(p.qty)}
+            </button>
+          ))}
+        </div>
+      )}
+      {intent === 'open' && stopLoss === '' && <div className="text-[11.5px] text-pending">No stop loss: this position would have no protection at OANDA if Scalp City goes offline.</div>}
+      <Btn variant="outline" onClick={doPreview} disabled={busy || !(Number(qty) > 0)}>
+        Preview order
+      </Btn>
+      <ErrorText>{error}</ErrorText>
+      {result && <div className="border-l-2 border-signal px-2 py-1.5 text-[12px] text-fg">{result}</div>}
+
+      {preview && (
+        <div className={cx('border p-3', live ? 'border-live/70' : 'border-line-2')}>
+          <div className="flex items-baseline justify-between">
+            <div className="display text-[15px]">ORDER PREVIEW</div>
+            <span className="label">expires {countdown(preview.expiresAt - now)}</span>
+          </div>
+          <div className="mt-1 flex items-baseline gap-2">
+            <span className="display text-[18px]" style={{ color: preview.request.side === 'buy' ? 'var(--color-call)' : 'var(--color-put)' }}>
+              {preview.request.intent === 'open' ? (preview.request.side === 'buy' ? 'LONG' : 'SHORT') : preview.request.side.toUpperCase()}
+            </span>
+            <span className="num text-[15px]">{instrumentName(preview.request.symbol)}</span>
+          </div>
+          <Row label="Units">{qtyStr(preview.request.qty)}</Row>
+          <Row label="Estimated price">{px(preview.request.symbol, preview.estimatedPrice)}</Row>
+          <Row label={`Value (${ccy})`}>{money(preview.estimatedNotional)}</Row>
+          <Row label="Margin needed / free">
+            {preview.estimatedMargin === null ? '—' : money(preview.estimatedMargin)} / {money(preview.marginAvailable)}
+          </Row>
+          {preview.request.intent === 'open' && (
+            <Row label="Loss if the stop is hit">{preview.riskAtStop === null ? <span className="text-pending">no stop</span> : <span className="text-put">{money(preview.riskAtStop)}</span>}</Row>
+          )}
+          <Row label="Position value (of equity)">{pct(preview.riskPct)}</Row>
+          <Row label="Environment">
+            <span className={live ? 'text-live' : 'text-paper'}>{live ? 'LIVE' : 'PRACTICE'}</span>
+          </Row>
+          {preview.warnings.map((w) => (
+            <div key={w} className="mt-1 text-[11.5px] text-pending">
+              {w}
+            </div>
+          ))}
+          <div className="mt-2 grid grid-cols-2 gap-x-3">
+            {preview.risk.checks.map((c) => (
+              <Check key={c.id} ok={c.passed} label={c.label} detail={c.passed ? undefined : c.detail} />
+            ))}
+          </div>
+          <div className="mt-3 flex gap-2">
+            <Btn variant="ghost" onClick={() => setPreview(null)}>
+              Cancel
+            </Btn>
+            <Btn variant={live ? 'danger' : 'solid'} onClick={submit} disabled={busy || !preview.risk.approved}>
+              {live ? 'Submit real order' : 'Submit practice order'}
+            </Btn>
+          </div>
+          {!preview.risk.approved && <div className="mt-2 text-[12px] text-put">Blocked by risk: {preview.risk.blockedBy?.label} — {preview.risk.blockedBy?.detail}</div>}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function WorkerSettings({ w }: { w: WorkerView }) {
   const live = useStore((s) => s.system?.env === 'live');
   const [draft, setDraft] = useState<Record<string, string>>({});
@@ -280,24 +518,39 @@ function WorkerSettings({ w }: { w: WorkerView }) {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
-  const fields: [string, string, 'limits' | 'exits' | 'options', number][] = [
-    ['maxTradesPerDay', 'Max trades', 'limits', w.config.limits.maxTradesPerDay],
-    ['maxContracts', 'Max contracts', 'limits', w.config.limits.maxContracts],
-    ['maxShares', 'Max shares', 'limits', w.config.limits.maxShares],
-    ['maxPositionNotional', 'Max position $', 'limits', w.config.limits.maxPositionNotional],
-    ['dailyLossLimit', 'Daily loss $', 'limits', w.config.limits.dailyLossLimit],
-    ['dailyGoal', 'Daily goal $', 'limits', w.config.limits.dailyGoal],
-    ['takeProfitPct', 'Take profit %', 'exits', w.config.exits.takeProfitPct],
-    ['stopLossPct', 'Stop loss %', 'exits', w.config.exits.stopLossPct],
-    ['maxHoldMinutes', 'Max hold min', 'exits', w.config.exits.maxHoldMinutes],
-    ['flattenBeforeCloseMinutes', 'Flatten before close', 'exits', w.config.exits.flattenBeforeCloseMinutes],
-    ['minDte', 'Min DTE', 'options', w.config.options.minDte],
-    ['maxDte', 'Max DTE', 'options', w.config.options.maxDte],
-    ['strikeOffset', 'Strikes OTM', 'options', w.config.options.strikeOffset],
-    ['maxSpreadPct', 'Max spread %', 'options', w.config.options.maxSpreadPct],
-    ['minVolume', 'Min volume', 'options', w.config.options.minVolume],
-    ['minOpenInterest', 'Min OI', 'options', w.config.options.minOpenInterest],
-  ];
+  const cfd = w.config.instrument === 'CFD';
+  const ccy = displayCurrency();
+  const fields: [string, string, 'limits' | 'exits' | 'options', number][] = cfd
+    ? [
+        ['maxTradesPerDay', 'Max trades', 'limits', w.config.limits.maxTradesPerDay],
+        ['riskPerTrade', `Risk / trade (${ccy})`, 'limits', w.config.limits.riskPerTrade],
+        ['maxPositionNotional', `Max position (${ccy})`, 'limits', w.config.limits.maxPositionNotional],
+        ['dailyLossLimit', `Daily loss (${ccy})`, 'limits', w.config.limits.dailyLossLimit],
+        ['dailyGoal', `Daily goal (${ccy})`, 'limits', w.config.limits.dailyGoal],
+        ['stopAtr', 'Stop (× ATR)', 'exits', w.config.exits.stopAtr],
+        ['targetAtr', 'Target (× ATR)', 'exits', w.config.exits.targetAtr],
+        ['maxHoldMinutes', 'Max hold min', 'exits', w.config.exits.maxHoldMinutes],
+        ['flattenBeforeCloseMinutes', 'Flatten before close', 'exits', w.config.exits.flattenBeforeCloseMinutes],
+        ['cooldownBars', 'Cooldown bars', 'exits', w.config.exits.cooldownBars],
+      ]
+    : [
+        ['maxTradesPerDay', 'Max trades', 'limits', w.config.limits.maxTradesPerDay],
+        ['maxContracts', 'Max contracts', 'limits', w.config.limits.maxContracts],
+        ['maxShares', 'Max shares', 'limits', w.config.limits.maxShares],
+        ['maxPositionNotional', `Max position (${ccy})`, 'limits', w.config.limits.maxPositionNotional],
+        ['dailyLossLimit', `Daily loss (${ccy})`, 'limits', w.config.limits.dailyLossLimit],
+        ['dailyGoal', `Daily goal (${ccy})`, 'limits', w.config.limits.dailyGoal],
+        ['takeProfitPct', 'Take profit %', 'exits', w.config.exits.takeProfitPct],
+        ['stopLossPct', 'Stop loss %', 'exits', w.config.exits.stopLossPct],
+        ['maxHoldMinutes', 'Max hold min', 'exits', w.config.exits.maxHoldMinutes],
+        ['flattenBeforeCloseMinutes', 'Flatten before close', 'exits', w.config.exits.flattenBeforeCloseMinutes],
+        ['minDte', 'Min DTE', 'options', w.config.options.minDte],
+        ['maxDte', 'Max DTE', 'options', w.config.options.maxDte],
+        ['strikeOffset', 'Strikes OTM', 'options', w.config.options.strikeOffset],
+        ['maxSpreadPct', 'Max spread %', 'options', w.config.options.maxSpreadPct],
+        ['minVolume', 'Min volume', 'options', w.config.options.minVolume],
+        ['minOpenInterest', 'Min OI', 'options', w.config.options.minOpenInterest],
+      ];
 
   const save = async (confirmed = false) => {
     setError(null);
@@ -305,7 +558,7 @@ function WorkerSettings({ w }: { w: WorkerView }) {
     const patch: Record<string, Record<string, number>> = { limits: {}, exits: {}, options: {} };
     for (const [key, , group] of fields) if (draft[key] !== undefined && draft[key] !== '') patch[group]![key] = Number(draft[key]);
     try {
-      await Api.updateWorker(w.config.id, { ...patch, instrument, allowShort, confirmed: confirmed || undefined, password: password || undefined });
+      await Api.updateWorker(w.config.id, { ...patch, instrument: cfd ? undefined : instrument, allowShort, confirmed: confirmed || undefined, password: password || undefined });
       setDraft({});
       setNeedConfirm(false);
       setNeedPassword(false);
@@ -327,13 +580,17 @@ function WorkerSettings({ w }: { w: WorkerView }) {
           <span className="label-strong text-[12px] text-fg">{w.config.name}</span>
           <span className="label ml-2">{w.config.strategyName}</span>
         </div>
-        <div className="flex items-center gap-1">
-          {(['OPTIONS', 'EQUITY'] as const).map((i) => (
-            <button key={i} className={seg(instrument === i)} onClick={() => setInstrument(i)}>
-              {i}
-            </button>
-          ))}
-        </div>
+        {cfd ? (
+          <span className="label">{w.config.symbol} · trades the instrument itself</span>
+        ) : (
+          <div className="flex items-center gap-1">
+            {(['OPTIONS', 'EQUITY'] as const).map((i) => (
+              <button key={i} className={seg(instrument === i)} onClick={() => setInstrument(i)}>
+                {i}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
       <div className="grid grid-cols-4 gap-2">
         {fields.map(([key, label, , cur]) => (
@@ -342,10 +599,10 @@ function WorkerSettings({ w }: { w: WorkerView }) {
           </Field>
         ))}
       </div>
-      {instrument === 'EQUITY' && (
+      {(instrument === 'EQUITY' || cfd) && (
         <div className="mt-2 flex items-center gap-2">
           <Toggle label="Allow short" on={allowShort} onChange={setAllowShort} />
-          <span className="label">Allow short sales on PUT signals (equity mode)</span>
+          <span className="label">{cfd ? 'Allow SHORT entries on bearish signals' : 'Allow short sales on PUT signals (equity mode)'}</span>
         </div>
       )}
       <div className="mt-2 flex items-center gap-2">

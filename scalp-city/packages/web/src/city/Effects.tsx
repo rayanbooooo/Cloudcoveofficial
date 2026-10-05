@@ -2,8 +2,8 @@ import { Html } from '@react-three/drei';
 import { useFrame } from '@react-three/fiber';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import * as THREE from 'three';
-import { parseOccSymbol, type CityEvent } from '@scalp-city/shared';
-import { money, price } from '../lib/format';
+import { instrumentName, isOandaSymbol, parseOccSymbol, type CityEvent } from '@scalp-city/shared';
+import { money, px, qtyStr } from '../lib/format';
 import { serverNow, useStore } from '../store/store';
 import { useLabelLayer } from './labelLayer';
 import { VAULT_POSITION, type Vec3 } from './layout';
@@ -31,7 +31,7 @@ const MAX_EVENT_AGE_MS = 8000;
 
 function instrument(ev: CityEvent): string {
   const o = parseOccSymbol(ev.symbol);
-  if (!o) return ev.symbol;
+  if (!o) return isOandaSymbol(ev.symbol) ? instrumentName(ev.symbol) : ev.symbol;
   return `${o.root} ${o.strike}${o.type === 'call' ? 'C' : 'P'}`;
 }
 
@@ -76,13 +76,13 @@ export function Effects({ anchors, onKill }: { anchors: Map<string, Anchor>; onK
       const k = () => `${ev.id}:${seq.current++}`;
       add.push({ key: k(), kind: 'pulse', pos: a.position, top: a.top, color, born, dur: 1.8 });
       if (ev.kind !== 'ORDER_SUBMITTED') add.push({ key: k(), kind: 'column', pos: a.position, top: a.top, color, born, dur: 1.2 });
-      const what = `${ev.qty} × ${instrument(ev)}`;
+      const what = `${qtyStr(ev.qty)} × ${instrument(ev)}`;
       switch (ev.kind) {
         case 'ORDER_SUBMITTED':
           add.push({ key: k(), kind: 'label', pos: a.position, top: a.top, color, born, dur: 2.6, text: 'SUBMITTED', sub: what });
           break;
         case 'ORDER_FILLED':
-          add.push({ key: k(), kind: 'label', pos: a.position, top: a.top, color, born, dur: 3.2, text: `FILLED @ ${price(ev.price)}`, sub: what });
+          add.push({ key: k(), kind: 'label', pos: a.position, top: a.top, color, born, dur: 3.2, text: `FILLED @ ${px(ev.symbol, ev.price)}`, sub: what });
           break;
         case 'ORDER_REJECTED':
           add.push({ key: k(), kind: 'label', pos: a.position, top: a.top, color, born, dur: 3.2, text: 'REJECTED', sub: what });

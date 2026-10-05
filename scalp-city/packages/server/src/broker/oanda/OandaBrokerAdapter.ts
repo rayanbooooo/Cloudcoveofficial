@@ -446,7 +446,11 @@ export class OandaBrokerAdapter implements BrokerAdapter {
     const sent = this.clock.now();
     const r = await this.refreshPricing();
     const receivedAt = this.clock.now();
-    const timestamp = r.time ?? r.date;
+    // The pricing response's own time is OANDA's clock to the millisecond; the HTTP Date header is
+    // only to the second but is unambiguous. If the two disagree by more than 2s the "time" field is
+    // not the server's current time (e.g. a stale price on a quiet instrument), so trust the header —
+    // a stale price must never look like a server clock problem and halt trading.
+    const timestamp = r.time !== null && r.date !== null ? (Math.abs(r.time - r.date) <= 2000 ? r.time : r.date) : (r.time ?? r.date);
     if (timestamp === null) throw new BrokerError('SERVER', 'OANDA pricing response carried no server time');
     const s = sessionClock(timestamp, this.rules);
     return { timestamp, isOpen: s.isOpen, nextOpen: s.nextOpen, nextClose: s.nextClose, receivedAt, rttMs: receivedAt - sent };

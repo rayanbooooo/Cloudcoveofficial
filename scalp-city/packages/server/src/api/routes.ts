@@ -301,7 +301,7 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
         limits: z.record(z.string(), z.number()).optional(),
         exits: z.record(z.string(), z.union([z.number(), z.boolean()])).optional(),
         options: z.record(z.string(), z.number()).optional(),
-        instrument: z.enum(['OPTIONS', 'EQUITY']).optional(),
+        instrument: z.enum(['OPTIONS', 'EQUITY', 'CFD']).optional(),
         allowShort: bool.optional(),
         confirmed: bool.optional(),
         password: z.string().max(256).optional(),

@@ -271,10 +271,11 @@ class SceneBoundary extends Component<{ children: ReactNode }, { error: string |
 function Legend() {
   // The legend sits in the free area; a drawer or the trading desk covers part of it.
   const covered = useStore((s) => s.ui.drawer !== null || s.ui.selectedWorker !== null);
+  const cfd = useStore((s) => s.system?.venue === 'oanda');
   if (covered) return null;
   const items: [string, string][] = [
-    ['CALL', STATE_COLORS.call],
-    ['PUT', STATE_COLORS.put],
+    [cfd ? 'LONG' : 'CALL', STATE_COLORS.call],
+    [cfd ? 'SHORT' : 'PUT', STATE_COLORS.put],
     ['NO SETUP', STATE_COLORS.neutral],
     ['ORDER PENDING', STATE_COLORS.pending],
     ['STOOD DOWN', STATE_COLORS.halted],

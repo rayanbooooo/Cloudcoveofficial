@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
-import type { JournalTradeView } from '@scalp-city/shared';
+import { directionLabel, instrumentName, type JournalTradeView } from '@scalp-city/shared';
 import { Api, ApiError } from '../lib/api';
-import { dateTimeET, humanize, money, pnlClass, price } from '../lib/format';
+import { dateTimeET, envLabel, humanize, money, pnlClass, price, px, qtyStr } from '../lib/format';
 import { useStore } from '../store/store';
 import { useReadiness } from './drawers/Risk';
 import { ConditionList } from './panels/Scanner';
@@ -42,7 +42,7 @@ function EnableLiveModal({ onClose }: { onClose: () => void }) {
           <p className="text-[14px] text-fg">You are about to enable real-money order execution.</p>
           <p className="text-[13px] text-fg-2">Orders submitted by this application can result in real financial losses.</p>
           <div className="border border-line-2 p-3">
-            <Row label="Broker">ALPACA</Row>
+            <Row label="Broker">{(system?.broker.name ?? 'alpaca').toUpperCase()}</Row>
             <Row label="Account">{account}</Row>
             <Row label="Environment">
               <span className="text-live">LIVE</span>
@@ -92,13 +92,15 @@ function EnableLiveModal({ onClose }: { onClose: () => void }) {
 
 function SwitchEnvModal({ target, onClose }: { target: 'paper' | 'live'; onClose: () => void }) {
   const [password, setPassword] = useState('');
+  const venue = useStore((s) => s.system?.venue);
   const { busy, error, run } = useAction();
   const toLive = target === 'live';
+  const name = envLabel(target, venue);
   return (
-    <Modal open onClose={onClose} title={`SWITCH TO ${target.toUpperCase()}`} danger={toLive}>
+    <Modal open onClose={onClose} title={`SWITCH TO ${name}`} danger={toLive}>
       <div className="flex flex-col gap-3">
         <p className="text-[13px] text-fg-2">
-          The trading system will stop, close its broker and data connections, and rebuild for the {target.toUpperCase()} account through the full recovery sequence. Workers come back with autotrading OFF.
+          The trading system will stop, close its broker and data connections, and rebuild for the {name} account through the full recovery sequence. Workers come back with autotrading OFF.
           {toLive && ' Live execution stays locked until you separately enable it.'}
         </p>
         <Field label="Your password">
@@ -110,7 +112,7 @@ function SwitchEnvModal({ target, onClose }: { target: 'paper' | 'live'; onClose
             Cancel
           </Btn>
           <Btn variant={toLive ? 'danger' : 'solid'} disabled={busy || !password} onClick={() => run(() => Api.switchEnv(target, password), onClose)}>
-            Switch to {target.toUpperCase()}
+            Switch to {name}
           </Btn>
         </div>
       </div>
@@ -132,8 +134,8 @@ function FlattenModal({ onClose }: { onClose: () => void }) {
             <div className="label">No open positions at the broker.</div>
           ) : (
             positions.map((p) => (
-              <Row key={p.symbol} label={p.symbol}>
-                {p.side === 'long' ? 'SELL' : 'BUY'} {p.qty} · <span className={pnlClass(p.unrealizedPnl)}>{money(p.unrealizedPnl, { sign: true })}</span>
+              <Row key={p.symbol} label={instrumentName(p.symbol)}>
+                {p.side === 'long' ? 'SELL' : 'BUY'} {qtyStr(p.qty)} · <span className={pnlClass(p.unrealizedPnl)}>{money(p.unrealizedPnl, { sign: true })}</span>
               </Row>
             ))
           )}
@@ -194,7 +196,7 @@ function TradeReviewModal({ tradeId, onClose }: { tradeId: string; onClose: () =
               symbol={t.underlying ?? t.symbol}
               date={date}
               height={240}
-              markers={(data?.events ?? []).filter((e) => e.at).map((e) => ({ time: e.at!, side: e.kind === 'ENTRY_FILL' ? 'buy' : 'sell', text: `${e.kind === 'ENTRY_FILL' ? 'IN' : 'OUT'} ${e.qty ?? ''} @${price(e.price)}` }))}
+              markers={(data?.events ?? []).filter((e) => e.at).map((e) => ({ time: e.at!, side: e.kind === 'ENTRY_FILL' ? 'buy' : 'sell', text: `${e.kind === 'ENTRY_FILL' ? 'IN' : 'OUT'} ${qtyStr(e.qty)} @${px(t.symbol, e.price)}` }))}
             />
             {t.signalConditions && (
               <div className="mt-3">
@@ -207,14 +209,14 @@ function TradeReviewModal({ tradeId, onClose }: { tradeId: string; onClose: () =
             <div className="flex items-baseline justify-between">
               <span className="label-strong text-[13px] text-fg">{t.workerName ?? 'MANUAL'}</span>
               <span className="display text-[15px]" style={{ color: t.direction === 'PUT' ? 'var(--color-put)' : 'var(--color-call)' }}>
-                {t.direction}
+                {directionLabel(t.direction, t.assetClass)}
               </span>
             </div>
             <div className={cx('num mt-1 text-[26px]', pnlClass(t.realizedPnl))}>{t.status === 'OPEN' ? 'OPEN' : money(t.realizedPnl, { sign: true })}</div>
-            <Row label="Instrument">{t.option ? `${t.option.underlying} ${price(t.option.strike)} ${t.option.type.toUpperCase()} ${t.option.expiration}` : t.symbol}</Row>
-            <Row label="Contracts / shares">{t.qty}</Row>
-            <Row label="Entry">{price(t.entryAvgPrice)}</Row>
-            <Row label="Exit">{price(t.exitAvgPrice)}</Row>
+            <Row label="Instrument">{t.option ? `${t.option.underlying} ${price(t.option.strike)} ${t.option.type.toUpperCase()} ${t.option.expiration}` : instrumentName(t.symbol)}</Row>
+            <Row label={t.assetClass === 'cfd' ? 'Units' : 'Contracts / shares'}>{qtyStr(t.qty)}</Row>
+            <Row label="Entry">{px(t.symbol, t.entryAvgPrice)}</Row>
+            <Row label="Exit">{px(t.symbol, t.exitAvgPrice)}</Row>
             <Row label="Exit reason">{t.exitReason ? humanize(t.exitReason) : '—'}</Row>
             <Row label="Opened">{dateTimeET(t.openedAt)}</Row>
             <Row label="Closed">{dateTimeET(t.closedAt)}</Row>
@@ -222,7 +224,10 @@ function TradeReviewModal({ tradeId, onClose }: { tradeId: string; onClose: () =
             <Row label="Position size">{money(t.positionNotional)}</Row>
             <Row label="Daily P&L before">{money(t.dailyPnlBefore, { sign: true })}</Row>
             <Row label="Daily P&L after">{money(t.dailyPnlAfter, { sign: true })}</Row>
-            <div className="label mt-3">Broker orders: {[...t.entryOrderIds, ...t.exitOrderIds].length} · P&L from actual fills, gross of regulatory fees</div>
+            <div className="label mt-3">
+              Broker orders: {[...t.entryOrderIds, ...t.exitOrderIds].length} ·{' '}
+              {t.assetClass === 'cfd' ? "P&L is OANDA's own figure for each fill, in account currency" : 'P&L from actual fills, gross of regulatory fees'}
+            </div>
           </div>
         </div>
       )}
@@ -262,7 +267,11 @@ export function Modals() {
           title={`ENABLE ${w?.config.name ?? modal.workerId}`}
           body={
             <>
-              {w?.config.name} will be allowed to submit orders autonomously ({w?.config.instrument}, up to {w?.config.limits.maxTradesPerDay} trades/day, {w?.config.limits.maxContracts} contracts, daily loss −{money(w?.config.limits.dailyLossLimit ?? null)}). Every order still passes the risk engine. Global autotrading must also be ON.
+              {w?.config.name} will be allowed to submit orders autonomously (
+              {w?.config.instrument === 'CFD'
+                ? `${instrumentName(w.config.symbol)} · long and short, up to ${w.config.limits.maxTradesPerDay} trades/day, risking at most ${money(w.config.limits.riskPerTrade)} per trade, a stop held by the broker on every entry`
+                : `${w?.config.instrument}, up to ${w?.config.limits.maxTradesPerDay} trades/day, ${w?.config.limits.maxContracts} contracts`}
+              , daily loss −{money(w?.config.limits.dailyLossLimit ?? null)}). Every order still passes the risk engine. Global autotrading must also be ON.
             </>
           }
           action={() => Api.setWorkerEnabled(modal.workerId, true, true)}

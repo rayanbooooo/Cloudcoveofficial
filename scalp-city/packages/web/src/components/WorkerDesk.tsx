@@ -1,13 +1,19 @@
-import { useMemo, useState } from 'react';
-import type { OrderView, WorkerView } from '@scalp-city/shared';
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react';
+import { instrumentDescription, instrumentName, type OrderView, type WorkerView } from '@scalp-city/shared';
 import { Api, ApiError } from '../lib/api';
 import { WORKER_DESK_WIDTH } from '../lib/layout';
-import { dateTimeET, humanize, money, pct, pnlClass, price, timeET } from '../lib/format';
+import { useIsMobile } from '../lib/useIsMobile';
+import { dateTimeET, humanize, money, pct, pnlClass, price, px, qtyStr, timeET } from '../lib/format';
 import { useStore } from '../store/store';
 import { Scanner } from './panels/Scanner';
 import { directionColor, TOWER_COLORS } from './panels/Workers';
-import { PriceChart, type ChartMarker } from './PriceChart';
+import { PriceChart, type ChartLevel, type ChartMarker } from './PriceChart';
 import { cx, Drawer, ErrorText, Money, Row, Toggle } from './ui';
+
+// The 3D desk shares the three.js chunk with the city, so it costs almost nothing until a tower is opened;
+// it is fetched shortly after start-up so the first click doesn't wait for it.
+const loadStage = () => import('../city/RobotStage');
+const RobotStage = lazy(loadStage);
 
 function PositionBlock({ w }: { w: WorkerView }) {
   const optionQuotes = useStore((s) => s.optionQuotes);
@@ -15,12 +21,21 @@ function PositionBlock({ w }: { w: WorkerView }) {
   if (!p) return <div className="label py-2">Flat — no position.</div>;
   const q = optionQuotes[p.symbol];
   const isOption = p.assetClass === 'us_option';
+  const cfd = p.assetClass === 'cfd';
+  const long = p.qty > 0;
   const mult = isOption ? 100 : 1;
+  const sym = p.symbol;
+  const one = Math.abs(p.qty) === 1;
+  const unit = isOption ? (one ? ' contract' : ' contracts') : cfd ? (one ? ' unit' : ' units') : one ? ' share' : ' shares';
+  const m = w.market;
+  // Account-currency exposure: units × price × the broker's quote→account conversion.
+  const exposure = cfd ? (p.markPrice !== null && m?.homeFactor != null ? p.markPrice * Math.abs(p.qty) * m.homeFactor : null) : p.markPrice === null ? null : p.markPrice * Math.abs(p.qty) * mult;
+  const stopDistance = cfd && p.stopPrice !== null ? Math.abs(p.avgEntryPrice - p.stopPrice) : null;
   return (
     <div>
       <div className="flex items-baseline justify-between">
-        <span className="display text-[16px]" style={{ color: p.direction === 'PUT' ? 'var(--color-put)' : 'var(--color-call)' }}>
-          {isOption ? p.option?.type.toUpperCase() : p.qty > 0 ? 'LONG' : 'SHORT'} · {p.symbol}
+        <span className="display text-[16px]" style={{ color: (isOption ? p.direction === 'PUT' : !long) ? 'var(--color-put)' : 'var(--color-call)' }}>
+          {isOption ? p.option?.type.toUpperCase() : long ? 'LONG' : 'SHORT'} · {cfd ? instrumentName(sym) : sym}
         </span>
         <span className={cx('num text-[18px]', pnlClass(p.unrealizedPnl))}>{money(p.unrealizedPnl, { sign: true })}</span>
       </div>
@@ -37,15 +52,25 @@ function PositionBlock({ w }: { w: WorkerView }) {
             <Row label="Last">{q ? price(q.last) : '—'}</Row>
           </>
         )}
-        <Row label="Quantity">{Math.abs(p.qty)}{isOption ? ' contracts' : ' shares'}</Row>
-        <Row label="Average fill">{price(p.avgEntryPrice)}</Row>
-        <Row label="Current">{price(p.markPrice)}</Row>
-        <Row label="Market value">{p.markPrice === null ? '—' : money(p.markPrice * Math.abs(p.qty) * mult)}</Row>
+        <Row label="Quantity">{qtyStr(Math.abs(p.qty))}{unit}</Row>
+        <Row label="Average fill">{px(sym, p.avgEntryPrice)}</Row>
+        <Row label="Current">{px(sym, p.markPrice)}</Row>
+        <Row label="Market value">{money(exposure)}</Row>
+        {cfd && (
+          <>
+            <Row label="Stop (held by OANDA)">
+              {p.stopPrice === null ? <span className="text-pending">NONE</span> : <>{px(sym, p.stopPrice)}<span className="ml-1 text-[10.5px] text-fg-3">({px(sym, stopDistance)} away)</span></>}
+            </Row>
+            <Row label="Target (bot exits)">{p.targetPrice === null ? '—' : px(sym, p.targetPrice)}</Row>
+            <Row label="Loss if stop hit">{p.riskAtStop === null ? '—' : <span className="text-put">−{money(p.riskAtStop)}</span>}</Row>
+          </>
+        )}
         <Row label="Unrealized %">
           <span className={pnlClass(p.unrealizedPnlPct)}>{pct(p.unrealizedPnlPct, { sign: true })}</span>
         </Row>
         <Row label="Opened">{timeET(p.openedAt)}</Row>
       </div>
+      {cfd && <div className="label mt-1 !text-[9.5px]">The stop lives at OANDA, so it still protects this position if this app or its server goes offline. The target is exited by the bot.</div>}
       {q?.stale && <div className="label mt-1 !text-pending">Option quote stale — exits wait for live data</div>}
     </div>
   );
@@ -61,15 +86,15 @@ function OrdersBlock({ orders }: { orders: OrderView[] }) {
           <span className="num text-[10.5px] text-fg-3">{timeET(o.createdAt)}</span>
           <span className="min-w-0 truncate">
             <span className="label-strong mr-1.5 text-[10px]" style={{ color: o.side === 'buy' ? 'var(--color-call)' : 'var(--color-put)' }}>
-              {o.purpose === 'ENTRY' ? 'ENTRY' : 'EXIT'} {o.side.toUpperCase()}
+              {o.purpose === 'PROTECTIVE_STOP' ? 'STOP' : o.purpose === 'ENTRY' ? 'ENTRY' : 'EXIT'} {o.side.toUpperCase()}
             </span>
             <span className="num text-[11px] text-fg">
-              {o.filledQty}/{o.qty} {o.symbol}
+              {qtyStr(o.filledQty)}/{qtyStr(o.qty)} {instrumentName(o.symbol)}
             </span>
             <span className="num ml-1.5 text-[10.5px] text-fg-3">
-              {o.type}
-              {o.limitPrice ? ` @${price(o.limitPrice)}` : ''}
-              {o.filledAvgPrice ? ` · fill ${price(o.filledAvgPrice)}` : ''}
+              {o.purpose === 'PROTECTIVE_STOP' ? 'broker stop' : o.type}
+              {o.stopPrice ? ` @${px(o.symbol, o.stopPrice)}` : o.limitPrice ? ` @${px(o.symbol, o.limitPrice)}` : ''}
+              {o.filledAvgPrice ? ` · fill ${px(o.symbol, o.filledAvgPrice)}` : ''}
             </span>
             {o.rejectReason && <div className="truncate text-[10.5px] text-put">{o.rejectReason}</div>}
           </span>
@@ -107,7 +132,13 @@ export function WorkerDesk() {
   const ordersMap = useStore((s) => s.orders);
   const select = useStore((s) => s.selectWorker);
   const openModal = useStore((s) => s.openModal);
+  const mobile = useIsMobile();
   const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    const t = window.setTimeout(() => void loadStage(), 2500);
+    return () => window.clearTimeout(t);
+  }, []);
 
   const orders = useMemo(() => Object.values(ordersMap).filter((o) => o.workerId === id).sort((a, b) => b.createdAt - a.createdAt), [ordersMap, id]);
   const markers: ChartMarker[] = useMemo(
@@ -117,7 +148,7 @@ export function WorkerDesk() {
         .map((o) => ({
           time: o.filledAt!,
           side: o.side,
-          text: `${o.purpose === 'ENTRY' ? 'IN' : 'OUT'} ${o.filledQty}${o.filledAvgPrice ? ` @${price(o.filledAvgPrice)}` : ''}`,
+          text: `${o.purpose === 'ENTRY' ? 'IN' : 'OUT'} ${qtyStr(o.filledQty)}${o.filledAvgPrice ? ` @${px(o.symbol, o.filledAvgPrice)}` : ''}`,
         })),
     [orders],
   );
@@ -125,6 +156,16 @@ export function WorkerDesk() {
   if (!w) return <Drawer open={false} onClose={() => select(null)} title="" children={null} />;
   const s = w.stats;
   const color = directionColor(w);
+  const cfd = w.config.instrument === 'CFD';
+  const pos = w.position;
+  const levels: ChartLevel[] =
+    cfd && pos
+      ? [
+          { price: pos.avgEntryPrice, color: '#dce6f5', title: `ENTRY ${qtyStr(Math.abs(pos.qty))}` },
+          ...(pos.stopPrice !== null ? [{ price: pos.stopPrice, color: '#ff4d6d', title: 'STOP (broker)' }] : []),
+          ...(pos.targetPrice !== null ? [{ price: pos.targetPrice, color: '#2ee6a6', title: 'TARGET' }] : []),
+        ]
+      : [];
 
   return (
     <Drawer open={!!w} onClose={() => select(null)} title={`${w.config.name} · TRADING DESK`} width={WORKER_DESK_WIDTH}>
@@ -137,8 +178,8 @@ export function WorkerDesk() {
                 {w.statusText}
               </span>
             </div>
-            <div className="label mt-1">
-              {w.config.strategyName} · {w.config.symbol} · {w.config.timeframe.replace('Min', 'm')} · {w.config.instrument}
+            <div className="label mt-1" title={instrumentDescription(w.config.symbol)}>
+              {w.config.strategyName} · {instrumentName(w.config.symbol)} · {w.config.timeframe.replace('Min', 'm')} · {cfd ? (w.config.allowShort ? 'CFD · long & short' : 'CFD · long only') : w.config.instrument}
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -161,7 +202,17 @@ export function WorkerDesk() {
         <ErrorText>{error}</ErrorText>
         {w.unmanagedWarning && <div className="border-l-2 border-pending bg-pending/5 px-2 py-1.5 text-[12px] text-pending">{w.unmanagedWarning}</div>}
 
-        <PriceChart symbol={w.config.symbol} markers={markers} defaultTf={w.config.timeframe} height={260} />
+        <Suspense fallback={<div className="label flex items-center justify-center border border-line" style={{ height: mobile ? 250 : 340 }}>Loading desk…</div>}>
+          <RobotStage workerId={w.config.id} height={mobile ? 250 : 340} lowPower={mobile} />
+        </Suspense>
+
+        {w.market && !w.market.listed && (
+          <div className="border-l-2 border-pending bg-pending/5 px-2 py-1.5 text-[12px] text-pending">
+            {instrumentName(w.config.symbol)} is not offered to this account by the broker, so this worker cannot trade it.
+          </div>
+        )}
+
+        <PriceChart symbol={w.config.symbol} markers={markers} levels={levels} defaultTf={w.config.timeframe} height={260} />
 
         <section>
           <div className="label mb-2">Signal scanner</div>
@@ -202,7 +253,9 @@ export function WorkerDesk() {
             ))}
           </div>
           <div className="label mt-2 !text-[9.5px]">
-            Limits: {w.config.limits.maxTradesPerDay} trades/day · {w.config.limits.maxContracts} contracts · {money(w.config.limits.maxPositionNotional)} max position · exits TP {w.config.exits.takeProfitPct}% / SL {w.config.exits.stopLossPct}% · last evaluated {dateTimeET(w.lastEvaluatedAt)}
+            {cfd
+              ? `Limits: ${w.config.limits.maxTradesPerDay} trades/day · risks ≤ ${money(w.config.limits.riskPerTrade)} per trade · stop ${w.config.exits.stopAtr}×ATR (held by the broker) / target ${w.config.exits.targetAtr}×ATR · max hold ${w.config.exits.maxHoldMinutes} min · last evaluated ${dateTimeET(w.lastEvaluatedAt)}`
+              : `Limits: ${w.config.limits.maxTradesPerDay} trades/day · ${w.config.limits.maxContracts} contracts · ${money(w.config.limits.maxPositionNotional)} max position · exits TP ${w.config.exits.takeProfitPct}% / SL ${w.config.exits.stopLossPct}% · last evaluated ${dateTimeET(w.lastEvaluatedAt)}`}
           </div>
         </section>
       </div>

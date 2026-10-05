@@ -122,6 +122,8 @@ export interface PositionView {
   option: OptionContractInfo | null;
   /** Worker that owns this position, or null if not opened by a worker. */
   workerId: string | null;
+  /** Held at the broker but not opened through Scalp City (adopted, never traded by workers). False for manual orders placed in the app. */
+  external: boolean;
   brokerUpdatedAt: number;
 }
 
@@ -290,6 +292,11 @@ export interface WorkerPositionView {
   openedAt: number;
   tradeId: string;
   option: OptionContractInfo | null;
+  /** CFD positions: the stop OANDA holds for this position (null = none active), the plan's target, and the loss if the stop is hit. */
+  stopPrice: number | null;
+  stopSource: 'broker' | null;
+  targetPrice: number | null;
+  riskAtStop: number | null;
 }
 
 /** Live instrument facts for a CFD worker (OANDA); null for options/shares workers. */

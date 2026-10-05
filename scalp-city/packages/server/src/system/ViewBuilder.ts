@@ -187,6 +187,7 @@ export class ViewBuilder {
         multiplier: mult,
         option: occ ? { underlying: occ.root, expiration: occ.expiration, type: occ.type, strike: occ.strike } : null,
         workerId: lp?.workerId ?? null,
+        external: lp?.external ?? true,
         brokerUpdatedAt: ctx.account.positionsAt ?? 0,
       };
     });
@@ -373,13 +374,18 @@ export class ViewBuilder {
     };
   }
 
+  /** What the non-live account is called at this broker. */
+  private paperWord(): string {
+    return this.config.venue === 'oanda' ? 'practice' : 'paper';
+  }
+
   readiness(ctx: TradingContext): ReadinessView {
     const ok = (v: boolean, detail: string) => ({ ok: v, detail });
     if (!ctx.configured) {
       const no = ok(false, 'broker not configured');
       return ctx.liveGate.readiness({
         brokerConnected: no, account: no, marketDataConnected: no, marketDataFresh: no, optionsData: no, riskLimits: no, killSwitch: no, dailyLoss: no,
-        reconciliation: no, noUnexpectedOrders: no, noUnexpectedPositions: no, workers: no, breakers: no, clock: no, paperRoundTrip: ok(this.paperRoundTrips > 0, `${this.paperRoundTrips} paper round trip(s)`),
+        reconciliation: no, noUnexpectedOrders: no, noUnexpectedPositions: no, workers: no, breakers: no, clock: no, paperRoundTrip: ok(this.paperRoundTrips > 0, `${this.paperRoundTrips} ${this.paperWord()} round trip(s)`),
       });
     }
     const b = ctx.account.status(ctx.broker.tradeStreamStatus().state === 'CONNECTED');
@@ -417,7 +423,10 @@ export class ViewBuilder {
       workers: ok(ctx.workers.all().length > 0, `${ctx.workers.all().length} workers configured`),
       breakers: ok(ctx.breakers.tripped().length === 0 && ctx.phase === 'READY', ctx.breakers.tripped().length ? `tripped: ${ctx.breakers.tripped().map((x) => x.label).join(', ')}` : ctx.phase),
       clock: ok(clock.ok, clock.brokerSkewMs === null ? 'not verified' : `skew ${clock.brokerSkewMs}ms`),
-      paperRoundTrip: ok(this.paperRoundTrips > 0, this.paperRoundTrips > 0 ? `${this.paperRoundTrips} completed paper round trip(s) in the journal` : 'run a full paper trade (entry → exit) first'),
+      paperRoundTrip: ok(
+        this.paperRoundTrips > 0,
+        this.paperRoundTrips > 0 ? `${this.paperRoundTrips} completed ${this.paperWord()} round trip(s) in the journal` : `run a full ${this.paperWord()} trade (entry → exit) first`,
+      ),
     };
     return ctx.liveGate.readiness(inputs);
   }

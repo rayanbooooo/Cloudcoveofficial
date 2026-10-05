@@ -59,7 +59,7 @@ export class LiveGate {
   readiness(inputs: ReadinessInputs): ReadinessView {
     const items: ReadinessItem[] = [
       { id: 'server_lock', label: 'Server live lock', ok: this.serverLockOpen, detail: this.serverLockOpen ? 'LIVE_TRADING_ENABLED=true' : 'LIVE_TRADING_ENABLED=false — set it on the server to allow live orders' },
-      { id: 'environment', label: 'Live environment', ok: this.env === 'live', detail: this.env === 'live' ? 'connected to the live account' : 'this server is running in PAPER' },
+      { id: 'environment', label: 'Live environment', ok: this.env === 'live', detail: this.env === 'live' ? 'connected to the live account' : 'this server is on the paper/practice account, not LIVE' },
       { id: 'broker', label: 'Broker', ...pick(inputs.brokerConnected) },
       { id: 'account', label: 'Account', ...pick(inputs.account) },
       { id: 'market_data', label: 'Market data', ...pick(inputs.marketDataConnected) },
@@ -93,7 +93,7 @@ export class LiveGate {
       void this.audit.record({ action: 'LIVE_MODE_ENABLE_REJECTED', actor: params.actor, env: this.env, details: { reason: msg } });
       throw new LiveGateError(msg, status);
     };
-    if (this.env !== 'live') refuse('This server is running in PAPER. Live execution can only be armed in a LIVE environment.');
+    if (this.env !== 'live') refuse('This server is running in PAPER (practice) mode. Live execution can only be armed in a LIVE environment.');
     if (!this.serverLockOpen) refuse('LIVE_TRADING_ENABLED is false on the server. Live orders are refused regardless of this app.', 403);
     if (!params.passwordOk) refuse('Password re-authentication failed.', 401);
     if (!params.acknowledgeRealMoney || !params.secondConfirmation) refuse('Both live-trading confirmations are required.');

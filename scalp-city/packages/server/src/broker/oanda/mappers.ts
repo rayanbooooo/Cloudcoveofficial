@@ -4,6 +4,17 @@ import type { BrokerInstrument, BrokerOrder } from '../types.js';
 /* eslint-disable @typescript-eslint/no-explicit-any */
 export type Raw = Record<string, any>;
 
+/**
+ * Can this price be traded on? OANDA reports it as `tradeable` (boolean) and,
+ * on newer API versions, as `status` ("tradeable" | "non-tradeable" | "invalid").
+ * Only an explicit "no" counts as no: a price that says nothing is not treated
+ * as a halted market (the broker would still refuse the order if it were).
+ */
+export function priceTradeable(p: Raw): boolean {
+  if (p.tradeable === false) return false;
+  return p.status !== 'non-tradeable' && p.status !== 'invalid';
+}
+
 /** OANDA sends every number as a decimal string. Missing or malformed → null, never 0. */
 export function num(v: unknown): number | null {
   if (v === null || v === undefined || v === '') return null;

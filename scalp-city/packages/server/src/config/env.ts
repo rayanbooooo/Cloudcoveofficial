@@ -177,7 +177,16 @@ const EnvSchema = z.object({
   MAX_CONCURRENT_POSITIONS: positiveInt(3),
   MAX_TRADES_PER_DAY: positiveInt(10),
   MAX_ORDERS_PER_MINUTE: positiveInt(10),
-  MAX_RISK_PER_TRADE: positiveNumber(25),
+  // OANDA (BROKER=oanda) has its own limits, in the ACCOUNT's currency. The
+  // Alpaca-style MAX_* values above are dollar figures sized for shares and
+  // options; they are deliberately ignored for OANDA so a leftover MAX_POSITION_SIZE=300
+  // can't silently block every FX/CFD order.
+  OANDA_MAX_DAILY_LOSS: positiveNumber(100),
+  OANDA_MAX_RISK_PER_TRADE: positiveNumber(20),
+  OANDA_MAX_POSITION_NOTIONAL: positiveNumber(10_000),
+  OANDA_MAX_ORDER_NOTIONAL: optionalString,
+  OANDA_MAX_CONCURRENT_POSITIONS: positiveInt(3),
+  OANDA_MAX_TRADES_PER_DAY: positiveInt(10),
   MAX_DATA_AGE_MS: positiveInt(5000),
   MAX_OPTION_QUOTE_AGE_MS: positiveInt(10_000),
   MAX_CLOCK_SKEW_MS: positiveInt(2000),
@@ -320,31 +329,48 @@ export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
   }
 
   // ── Risk defaults ──────────────────────────────────────────────────────
-  const positionRaw = e.MAX_POSITION_NOTIONAL ?? e.MAX_POSITION_SIZE;
-  const maxPositionNotional = positionRaw === undefined ? (venue === 'oanda' ? 10_000 : 1000) : Number(positionRaw);
-  if (!Number.isFinite(maxPositionNotional) || maxPositionNotional <= 0) {
-    throw new ConfigError(`MAX_POSITION_SIZE must be a positive number, got "${positionRaw}"`);
-  }
-  // Leveraged FX/CFD positions carry far more notional per unit of risk than
-  // options do, so the default caps differ by venue (explicit values win).
-  const maxOrderNotional = e.MAX_ORDER_NOTIONAL === undefined ? (venue === 'oanda' ? 10_000 : 1000) : Number(e.MAX_ORDER_NOTIONAL);
-  if (!Number.isFinite(maxOrderNotional) || maxOrderNotional <= 0) {
-    throw new ConfigError(`MAX_ORDER_NOTIONAL must be a positive number, got "${e.MAX_ORDER_NOTIONAL}"`);
-  }
-  const riskDefaults: RiskLimits = {
-    maxDailyLoss: e.MAX_DAILY_LOSS,
-    maxPositionNotional,
-    maxOrderNotional,
-    maxContracts: e.MAX_CONTRACTS,
-    maxShares: e.MAX_SHARES,
-    maxConcurrentPositions: e.MAX_CONCURRENT_POSITIONS,
-    maxTradesPerDay: e.MAX_TRADES_PER_DAY,
-    maxOrdersPerMinute: e.MAX_ORDERS_PER_MINUTE,
-    maxPriceDeviationPct: 5,
-    noEntriesBeforeCloseMinutes: 10,
-    pdtGuard: true,
-    maxRiskPerTrade: e.MAX_RISK_PER_TRADE,
+  const num = (raw: string | undefined, name: string, fallback: number): number => {
+    if (raw === undefined) return fallback;
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n <= 0) throw new ConfigError(`${name} must be a positive number, got "${raw}"`);
+    return n;
   };
+  let riskDefaults: RiskLimits;
+  if (venue === 'oanda') {
+    // Leveraged FX/CFD positions carry far more notional per unit of risk than
+    // options do, so OANDA has its own limits. Risk per trade is the real
+    // control (every position carries a broker-side stop); notional is a sanity cap.
+    const maxPositionNotional = e.OANDA_MAX_POSITION_NOTIONAL;
+    riskDefaults = {
+      maxDailyLoss: e.OANDA_MAX_DAILY_LOSS,
+      maxPositionNotional,
+      maxOrderNotional: num(e.OANDA_MAX_ORDER_NOTIONAL, 'OANDA_MAX_ORDER_NOTIONAL', maxPositionNotional),
+      maxContracts: e.MAX_CONTRACTS,
+      maxShares: e.MAX_SHARES,
+      maxConcurrentPositions: e.OANDA_MAX_CONCURRENT_POSITIONS,
+      maxTradesPerDay: e.OANDA_MAX_TRADES_PER_DAY,
+      maxOrdersPerMinute: e.MAX_ORDERS_PER_MINUTE,
+      maxPriceDeviationPct: 2,
+      noEntriesBeforeCloseMinutes: 10,
+      pdtGuard: false,
+      maxRiskPerTrade: e.OANDA_MAX_RISK_PER_TRADE,
+    };
+  } else {
+    riskDefaults = {
+      maxDailyLoss: e.MAX_DAILY_LOSS,
+      maxPositionNotional: num(e.MAX_POSITION_NOTIONAL ?? e.MAX_POSITION_SIZE, 'MAX_POSITION_SIZE', 1000),
+      maxOrderNotional: num(e.MAX_ORDER_NOTIONAL, 'MAX_ORDER_NOTIONAL', 1000),
+      maxContracts: e.MAX_CONTRACTS,
+      maxShares: e.MAX_SHARES,
+      maxConcurrentPositions: e.MAX_CONCURRENT_POSITIONS,
+      maxTradesPerDay: e.MAX_TRADES_PER_DAY,
+      maxOrdersPerMinute: e.MAX_ORDERS_PER_MINUTE,
+      maxPriceDeviationPct: 5,
+      noEntriesBeforeCloseMinutes: 10,
+      pdtGuard: true,
+      maxRiskPerTrade: 25, // CFD-only limit; unused for shares and options
+    };
+  }
 
   let symbols: string[];
   if (venue === 'oanda') {

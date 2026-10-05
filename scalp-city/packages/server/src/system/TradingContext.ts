@@ -324,7 +324,7 @@ export class TradingContext {
     );
     this.ready = true;
     const stockState = this.provider.status().stock.state;
-    if (stockState === 'CONNECTED') this.setPhase('READY', 'recovered — workers monitoring, autotrading OFF until enabled');
+    if (stockState === 'CONNECTED') this.setPhase('READY', 'recovered — workers monitoring (autotrading is OFF after every restart until you enable it)');
     else this.setPhase('DEGRADED', `market data ${stockState.toLowerCase()} — trading blocked until live data resumes`);
     void this.o.audit.record({
       action: 'RECOVERY_COMPLETE',

@@ -1,4 +1,4 @@
-import type { AssetClass, OrderSide, OrderType, TradingEnvironment } from './domain.js';
+import type { AssetClass, Instrument, OrderSide, OrderType, TradingEnvironment } from './domain.js';
 import type { Bar } from './marketdata.js';
 import type {
   ExitRules,
@@ -97,7 +97,7 @@ export interface WorkerUpdateRequest {
   limits?: Partial<WorkerLimits>;
   exits?: Partial<ExitRules>;
   options?: Partial<OptionSelectionPrefs>;
-  instrument?: 'OPTIONS' | 'EQUITY';
+  instrument?: Instrument;
   allowShort?: boolean;
   confirmed?: boolean;
   password?: string;

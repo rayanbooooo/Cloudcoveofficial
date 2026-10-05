@@ -1,18 +1,79 @@
+import { priceDecimals } from '@scalp-city/shared';
+
 /**
  * Display formatting. A null value is UNAVAILABLE — it is never rendered as
  * zero or as a placeholder number.
  */
 export const UNAVAILABLE = 'UNAVAILABLE';
 
-const moneyFmt = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+interface CurrencyInfo {
+  code: string;
+  /** "$", "£", "€", "¥" — or the ISO code plus a space when the currency has no short symbol. */
+  prefix: string;
+  digits: number;
+  fmt: Intl.NumberFormat;
+}
+
+const currencyCache = new Map<string, CurrencyInfo>();
+
+function currencyInfo(code: string): CurrencyInfo {
+  const hit = currencyCache.get(code);
+  if (hit) return hit;
+  let info: CurrencyInfo;
+  try {
+    const f = new Intl.NumberFormat('en-US', { style: 'currency', currency: code, currencyDisplay: 'narrowSymbol' });
+    const symbol = f.formatToParts(1).find((p) => p.type === 'currency')?.value ?? code;
+    const digits = f.resolvedOptions().maximumFractionDigits ?? 2;
+    info = { code, prefix: /^[A-Za-z]+$/.test(symbol) ? `${symbol} ` : symbol, digits, fmt: new Intl.NumberFormat('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits }) };
+  } catch {
+    info = { code: 'USD', prefix: '$', digits: 2, fmt: new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) };
+  }
+  currencyCache.set(code, info);
+  return info;
+}
+
+let current: CurrencyInfo = currencyInfo('USD');
+
+/** The account's currency: every money() figure is in it. Set from the broker's account view. */
+export function setDisplayCurrency(code: string | null | undefined): void {
+  const next = currencyInfo((code ?? 'USD').toUpperCase());
+  if (next.code !== current.code) current = next;
+}
+
+export function displayCurrency(): string {
+  return current.code;
+}
+
 const intFmt = new Intl.NumberFormat('en-US', { maximumFractionDigits: 0 });
 
 export function money(v: number | null | undefined, opts: { sign?: boolean; compact?: boolean } = {}): string {
   if (v === null || v === undefined || !Number.isFinite(v)) return UNAVAILABLE;
   const abs = Math.abs(v);
-  const body = opts.compact && abs >= 100_000 ? `${(abs / 1000).toFixed(abs >= 1_000_000 ? 0 : 1)}K` : moneyFmt.format(abs);
-  if (opts.sign) return `${v > 0 ? '+' : v < 0 ? '−' : ''}$${body}`;
-  return `${v < 0 ? '−' : ''}$${body}`;
+  const body = opts.compact && abs >= 100_000 ? `${(abs / 1000).toFixed(abs >= 1_000_000 ? 0 : 1)}K` : current.fmt.format(abs);
+  if (opts.sign) return `${v > 0 ? '+' : v < 0 ? '−' : ''}${current.prefix}${body}`;
+  return `${v < 0 ? '−' : ''}${current.prefix}${body}`;
+}
+
+/** The environment as the broker calls it: PAPER (Alpaca), PRACTICE (OANDA), LIVE. */
+export function envLabel(env: 'paper' | 'live' | null | undefined, venue?: string | null): string {
+  return env === 'live' ? 'LIVE' : venue === 'oanda' ? 'PRACTICE' : 'PAPER';
+}
+
+/** Order size without float noise: 3 → "3", 0.30000000000000004 → "0.3". */
+export function qtyStr(v: number | null | undefined): string {
+  if (v === null || v === undefined || !Number.isFinite(v)) return '—';
+  return Number(v.toFixed(6)).toLocaleString('en-US', { maximumFractionDigits: 6 });
+}
+
+/** "1 unit", "2.5 units": the size with its noun agreeing in number. */
+export function unitsStr(v: number | null | undefined): string {
+  if (v === null || v === undefined || !Number.isFinite(v)) return '—';
+  return `${qtyStr(v)} ${Math.abs(v) === 1 ? 'unit' : 'units'}`;
+}
+
+/** A price with the decimals its market is quoted in: GBP_USD 1.30012, EUR_JPY 162.015, XAU_USD 2650.125, NAS100_USD 20501.2. */
+export function px(symbol: string | null | undefined, v: number | null | undefined): string {
+  return price(v, symbol ? priceDecimals(symbol) : 2);
 }
 
 export function price(v: number | null | undefined, decimals = 2): string {

@@ -280,6 +280,39 @@ export class FakeOanda {
     return t;
   }
 
+  // ── Test setup helpers ──────────────────────────────────────────────────
+
+  /** A trade that was opened before today (its opening transaction is time-stamped `hoursAgo` hours back). */
+  seedTrade(instrument: string, units: number, price: number, hoursAgo = 20): Trade {
+    const id = String(this.nextId++);
+    const time = this.now() - hoursAgo * 3_600_000;
+    this.transactions.push({
+      id,
+      time: iso(time),
+      accountID: this.o.accountId,
+      type: 'ORDER_FILL',
+      instrument,
+      units: String(units),
+      reason: 'MARKET_ORDER',
+      tradeOpened: { tradeID: id, units: String(units), price: s(price, this.spec(instrument).displayPrecision) },
+    });
+    const t: Trade = { id, instrument, price, openTime: time, initialUnits: units, currentUnits: units, realizedPL: 0, stopLossOrderId: null };
+    this.trades.set(id, t);
+    return t;
+  }
+
+  /** A deposit (not trading P&L). */
+  deposit(amount: number): void {
+    this.balance += amount;
+    this.tx({ type: 'TRANSFER_FUNDS', amount: s(amount), fundingReason: 'CLIENT_FUNDING', accountBalance: s(this.balance) });
+  }
+
+  /** Overnight financing charged to the account. */
+  financing(amount: number): void {
+    this.balance += amount;
+    this.tx({ type: 'DAILY_FINANCING', financing: s(amount), accountBalance: s(this.balance), positionFinancings: [] });
+  }
+
   // ── Orders ──────────────────────────────────────────────────────────────
 
   private orderJson(o: Order): any {

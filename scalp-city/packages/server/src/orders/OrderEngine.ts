@@ -1,6 +1,8 @@
 import {
   LIVE_ORDER_STATES,
   SUPPORTED_ORDER_TYPES,
+  directionLabel,
+  instrumentName,
   isOandaSymbol,
   type CityEvent,
   type OrderState,
@@ -67,6 +69,9 @@ export interface OrderEngineDeps {
 
 /** Client order id suffix of the broker-side stop that protects an entry. */
 export const PROTECTIVE_SUFFIX = '.sl';
+
+/** The name a person knows a market by in alerts: "GOLD" for XAU_USD, the ticker for shares and options. */
+const displayName = (symbol: string): string => (isOandaSymbol(symbol) ? instrumentName(symbol) : symbol);
 
 const CFD_TIF: Record<string, readonly string[]> = { market: ['fok', 'ioc'], limit: ['fok', 'ioc', 'gtc', 'day'] };
 
@@ -777,7 +782,7 @@ export class OrderEngine {
             'ORDER_FILLED',
             order.purpose === 'PROTECTIVE_STOP' ? 'warn' : 'success',
             order.purpose === 'PROTECTIVE_STOP' ? 'Broker stop filled' : 'Order filled',
-            `${order.side.toUpperCase()} ${formatQty(order.filledQty)} ${order.symbol} @ ${order.filledAvgPrice === null ? 'n/a' : formatPrice(order.filledAvgPrice, order.symbol)}`,
+            `${order.side.toUpperCase()} ${formatQty(order.filledQty)} ${displayName(order.symbol)} @ ${order.filledAvgPrice === null ? 'n/a' : formatPrice(order.filledAvgPrice, order.symbol)}`,
           );
           break;
         case 'CANCELED': {
@@ -800,7 +805,7 @@ export class OrderEngine {
           bus.emit('ORDER_REJECTED', { order });
           void audit.record({ ...base, action: 'ORDER_REJECTED', actor: 'broker', details: { reason: order.rejectReason } });
           timeline.add({ kind: 'order', severity: 'error', ts: at, workerId: order.workerId, symbol: order.symbol, title: `Order rejected · ${order.symbol}`, detail: order.rejectReason });
-          alerts.raise('ORDER_REJECTED', 'error', 'Order rejected', `${order.symbol}: ${order.rejectReason}`);
+          alerts.raise('ORDER_REJECTED', 'error', 'Order rejected', `${displayName(order.symbol)}: ${order.rejectReason}`);
           this.d.breakers.brokerRejected(order.rejectReason ?? 'rejected');
           this.city('ORDER_REJECTED', order, null, null);
           break;
@@ -817,7 +822,7 @@ export class OrderEngine {
     if (effect?.opened) {
       bus.emit('POSITION_OPENED', { trade: effect.opened });
       void audit.record({ ...base, action: 'POSITION_OPENED', actor: 'broker', details: { tradeId: effect.opened.id, qty: effect.opened.qtyOpened, direction: effect.opened.direction } });
-      alerts.raise('POSITION_OPENED', 'info', 'Position opened', `${order.symbol} · ${effect.opened.direction}`);
+      alerts.raise('POSITION_OPENED', 'info', 'Position opened', `${displayName(order.symbol)} · ${directionLabel(effect.opened.direction, order.assetClass)}`);
     }
     if (effect?.closed) {
       const t = effect.closed;
@@ -833,7 +838,7 @@ export class OrderEngine {
         title: `Position closed · ${this.money(pnl, true)}`,
         detail: t.exitReason,
       });
-      alerts.raise('POSITION_CLOSED', pnl >= 0 ? 'success' : 'warn', 'Position closed', `${order.symbol} ${this.money(pnl, true)}`);
+      alerts.raise('POSITION_CLOSED', pnl >= 0 ? 'success' : 'warn', 'Position closed', `${displayName(order.symbol)} ${this.money(pnl, true)}`);
       this.city(pnl >= 0 ? 'PROFIT_LOCKED' : 'POSITION_CLOSED', order, fillPrice, pnl);
     }
   }

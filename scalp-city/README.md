@@ -1,9 +1,15 @@
 # Scalp City
 
-A self-hosted, single-user trading command center for **Alpaca** (Trading API, personal account). Five
-autonomous scalping workers watch QQQ, SPY and IWM, build a "charge" from six technical conditions, and,
-only if every risk check passes, trade options (or shares) through Alpaca. A 3D city visualizes what
-the workers are doing. Every number on screen comes from the broker or the market data feed.
+A self-hosted, single-user trading command center. Autonomous scalping workers build a "charge" from six
+technical conditions and, only if every risk check passes, trade through one broker per server:
+
+- **OANDA** (`BROKER=oanda`): **gold, Nasdaq 100, GBP/USD, EUR/JPY and US30** (FX, metals and index CFDs),
+  long and short, with a stop held at the broker on every entry. Paper = an OANDA fxTrade *Practice* account.
+- **Alpaca** (`BROKER=alpaca`): QQQ, SPY and IWM options (or shares). Alpaca cannot trade FX, metals or
+  index CFDs.
+
+A 3D city visualizes what the workers are doing, and clicking a tower puts you at that worker's desk. Every
+number on screen comes from the broker or the market data feed.
 
 > **Real money is at risk in LIVE mode.** Scalp City defaults to PAPER. Nothing here is financial advice,
 > and nothing here claims the strategy is profitable. Read [Honest limitations](#honest-limitations)
@@ -12,7 +18,7 @@ the workers are doing. Every number on screen comes from the broker or the marke
 ```
 packages/
   shared/   TypeScript types, indicators, signal engine, OCC parser (used by server and UI)
-  server/   Fastify API + WebSocket, Alpaca adapters, risk engine, order engine, workers, audit log
+  server/   Fastify API + WebSocket, Alpaca and OANDA adapters, risk engine, order engine, workers, audit log
   web/      React + Vite + Tailwind UI, Zustand store, lightweight-charts, React Three Fiber city
 ```
 
@@ -24,13 +30,15 @@ npm run demo          # builds the UI, starts http://127.0.0.1:8787
 # sign in: demo / scalp-city-demo
 DEMO_AUTOTRADE=1 npm run demo   # same, with autotrading switched on so you can watch workers trade
 DEMO_SETUP=1 npm run demo       # no preset account: create your own in the browser (first-run flow)
+DEMO_BROKER=oanda DEMO_AUTOTRADE=1 npm run demo   # the OANDA-style demo: gold, NAS100, GBP/USD, EUR/JPY, US30
 ```
 
 `npm run demo` starts the **dev harness** (`packages/server/test/harness/devServer.ts`). It runs the real
-server and UI against `FakeAlpaca`, the protocol-level fake broker the end-to-end tests use, with a
-synthetic random-walk market, an in-memory PostgreSQL (PGlite) and a virtual clock pinned to a regular
-session. It never contacts Alpaca, and the UI shows a `NON-STANDARD BROKER ENDPOINT` warning the
-whole time. The prices are synthetic and say nothing about real markets.
+server and UI against `FakeAlpaca` (or, with `DEMO_BROKER=oanda`, `FakeOanda`), the protocol-level fake
+brokers the end-to-end tests use, with a synthetic market, an in-memory PostgreSQL (PGlite) and a virtual
+clock pinned to a regular session. It never contacts a real broker, and the UI shows a
+`NON-STANDARD BROKER ENDPOINT` warning the whole time. The prices are synthetic and say nothing about real
+markets.
 
 To show the demo at a public URL (for example a Vercel Sandbox), start it with `HOST=0.0.0.0`,
 `PUBLIC_URL` and `ALLOWED_ORIGINS` set to that URL, `COOKIE_SECURE=true` and a strong
@@ -60,13 +68,55 @@ server. (`npm run user:create` does the same from a terminal.)
 Set `ALPACA_STOCK_FEED` / `ALPACA_OPTIONS_FEED` to what your data plan actually includes. The UI labels
 the feeds from these values (`LIVE · IEX ONLY`, `LIVE · SIP`, `DELAYED 15 MIN`).
 
-First paper session checklist:
+First paper session checklist (Alpaca; the OANDA checklist is the same with *practice* for *paper*):
 
 1. Health drawer is all green: broker, trade stream, market data, clock skew, reconciliation.
 2. Autotrading is **off** after every restart. Turn on one worker, then autotrading.
 3. Watch a worker go WATCHING → FORMING → CHARGING → READY, then follow the risk check, order, fill,
    exit, and the journal entry. Confirm each against the Alpaca dashboard.
 4. Try the kill switch and FLATTEN ALL on paper so you know exactly what they do.
+
+## Run against OANDA PRACTICE (gold, Nasdaq, FX, US30)
+
+Requirements: Node 22+, PostgreSQL 16, an OANDA **fxTrade Practice** account with a personal API token.
+
+```bash
+cp .env.example .env     # BROKER=oanda, OANDA_PRACTICE_TOKEN, OANDA_PRACTICE_ACCOUNT_ID, SESSION_SECRET, DATABASE_URL
+npm run db:up && npm run migrate
+npm run dev
+```
+
+- `TRADING_ENVIRONMENT=paper` means the **Practice** account; `live` means fxTrade. The live host is
+  pinned in code: anything else refuses to start.
+- **Market data is OANDA's own.** The pricing stream gives bid/ask (charts use the **mid**) and OANDA's
+  official 1-minute candles give the bars. FX/CFD volume is a **tick count** (number of price updates),
+  not traded size, and the UI says so; VWAP and relative volume are computed from it.
+- **Instruments** come from `OANDA_INSTRUMENTS` (default `XAU_USD, NAS100_USD, GBP_USD, EUR_JPY,
+  US30_USD`) and each worker is seeded for one of them. The app reads your account's instrument list: a
+  market your OANDA entity does not offer shows *not offered to this account* and is never traded.
+- **Trading window.** OANDA trades nearly 24 hours, so new positions open only inside `OANDA_SESSION`
+  (default `09:30-16:00` New York, weekdays, US holidays skipped); OANDA's per-market `tradeable` flag
+  has the last word.
+- **Risk limits are separate for OANDA** (`OANDA_MAX_*`, in account currency) so Alpaca's share/option
+  sized `MAX_*` values can never block or inflate a CFD order.
+
+How an OANDA entry is made, and why it is safer than a naive bot:
+
+1. **Sized by risk.** Units = (the worker's risk per trade) ÷ (stop distance), where the stop is
+   1.5 × ATR (default), rounded down to the broker's unit step and capped by the position-value limit,
+   margin (with a buffer) and the per-trade risk cap. If it can't be sized, the scanner says why.
+2. **Fill-or-kill market order with a worst-acceptable price** and `OPEN_ONLY`, carrying a **stop loss held
+   by OANDA** (`stopLossOnFill`). If the app, the host or the network goes down, the stop is still at the
+   broker. The app adopts that stop as a protective order and shows it; a position without one is flagged
+   **NO BROKER-SIDE STOP**.
+3. **Exits** (target 2 × ATR, time stop, end of window, VWAP loss, the same stop as a software check) are
+   `REDUCE_ONLY` market orders, which can only close, never open a reverse position.
+4. **Fills come from OANDA's transaction stream**, with a replay (`/transactions/sinceid`) after any
+   reconnect. A fill is applied once, in the same transaction as the ledger; P&L per fill is OANDA's own
+   figure in account currency. Day P&L is rebuilt from OANDA's transactions since 00:00 New York and fails
+   closed when it can't be established.
+5. **No blind retries.** The order is written as `SUBMITTING` first; an ambiguous result is resolved by
+   looking the order up by its client id (`@clientID`) and is never resubmitted.
 
 ## Going LIVE (only after paper is stable)
 
@@ -80,13 +130,13 @@ LIVE needs four independent gates. Any one of them missing means no live order:
 
 | Gate | Where | Notes |
 |---|---|---|
-| `TRADING_ENVIRONMENT=live` | server `.env` | Live keys. The live URL is pinned to `https://api.alpaca.markets`; anything else refuses to start. |
+| `TRADING_ENVIRONMENT=live` | server `.env` | Live keys. The live URL is pinned (`https://api.alpaca.markets`, or OANDA's `https://api-fxtrade.oanda.com`); anything else refuses to start. |
 | `LIVE_TRADING_ENABLED=true` | server `.env` | Server-side lock. While false, every live order is refused, whatever the UI does. |
 | Arming | in-app | Re-enter your password, type the masked account number, two confirmations, and the readiness checklist must pass. That includes a verified **paper round trip**. Arming is never persisted: a restart disarms. |
 | Autotrading | in-app | Off after every restart. In LIVE, turning it on requires an explicit confirmation. |
 
 LIVE is unmistakable: a striped red `LIVE` badge, a red frame around the whole app, and a red emblem
-on the vault. The app never switches between PAPER and LIVE silently. A switch requires your
+on the vault. (With OANDA the non-live environment is labelled **PRACTICE**, never PAPER.) The app never switches between PAPER and LIVE silently. A switch requires your
 password and a confirmation, and it is refused while orders are working. The new environment starts
 disarmed, with autotrading off.
 
@@ -166,8 +216,8 @@ disarmed, with autotrading off.
 
 Each tower is a worker and every visual maps to real state:
 
-- **Color.** Hue is the direction: green CALL, red PUT, blue no setup, amber order pending, grey stood
-  down. Brightness is the confirmed charge.
+- **Color.** Hue is the direction: green CALL / LONG, red PUT / SHORT, blue no setup, amber order pending,
+  grey stood down. Brightness is the confirmed charge.
 - **Edge strips** fill up with the charge. A faint ghost shows the forming-bar preview.
 - **Dial** above the robot: segmented charge with ticks at the 30/60/100 thresholds.
 - **Sky beam** only for an engaged worker (ready, ordering, or holding). A READY setup that already
@@ -178,13 +228,22 @@ Each tower is a worker and every visual maps to real state:
 - **Event effects** (pulses, fill labels, P&L) fire only from server events emitted after the broker
   confirms. Events older than 8 seconds are not replayed.
 
-If WebGL is unavailable, the city is replaced by a notice. All trading state and controls live in the
-panels anyway.
+**Click a tower** to open the worker's **desk**: a close-up of its robot at three monitors, with the real
+1-minute bars and VWAP (entry, stop and target drawn on the chart), the worker's signal and charge, and
+the broker-confirmed position, P&L and orders. The robot is driven by the worker's real state: it scans the
+screens while watching, leans in as the setup charges, hammers the keyboard while an order is out at the
+broker, thinks while it holds a position, turns to face you with arms up when a trade closes in profit,
+slumps when stood down, and puts its hands up with a flashing lamp when halted. Call-outs (*ORDER SENT*,
+*FILLED*, the closing P&L) appear only for transitions the server reports. **Expand** opens it full screen.
+It reflects state and has no controls: it cannot place orders.
+
+If WebGL is unavailable, the city and the desk are replaced by a notice. All trading state and controls
+live in the panels anyway.
 
 ## Tests
 
 ```bash
-npm test         # 136 tests (31 shared + 105 server), ~30 s, no network, no database server needed
+npm test         # 214 tests (31 shared + 183 server), ~40 s, no network, no database server needed
 TEST_DATABASE_URL=postgres://… npm test   # also runs the 2 single-instance-lock tests against a real PostgreSQL
 npm run typecheck
 ```
@@ -201,6 +260,9 @@ npm run typecheck
 | `config-auth` | Paper default, live lock, endpoint pinning, auth, CSRF, WebSocket origin, log redaction. |
 | `db` | Migrations and the audit log's immutability triggers. |
 | `e2e.paper` | Boots the real app against `FakeAlpaca` under a virtual clock and runs the full flow end to end. |
+| `oanda`, `oandaStream`, `oandaDayPnl` | The OANDA adapter against `FakeOanda`: order mapping, precision and price bounds, ambiguous-submit resolution, transaction-stream replay after a drop, clock skew, day P&L from transactions. |
+| `cfd` | CFD risk and sizing: risk-per-trade units, notional and margin caps, stop-side checks, long and short, fail-closed cases. |
+| `e2e.oanda` | The full OANDA flow end to end: sizing, FOK entry with a broker-held stop, fills from the transaction stream, exits, ledger, reconciliation. |
 
 The `e2e.paper` flow:
 
@@ -214,6 +276,21 @@ The `e2e.paper` flow:
 Automated tests never use live credentials.
 
 ## Honest limitations
+
+- **OANDA is not yet exercised against OANDA's real servers.** This build environment could not reach
+  them. The adapter follows OANDA's published v20 definitions (REST, the two newline-delimited JSON streams,
+  `stopLossOnFill`, `positionFill`, `priceBound`, `clientExtensions`) and is tested against `FakeOanda`, a
+  protocol-level fake built from those definitions. Your first real run must be **PRACTICE** with the
+  Health drawer open, and you should complete a practice round trip before any live money.
+- **Availability depends on your OANDA account.** Metals and index CFDs are not offered to every OANDA
+  entity or region; an unavailable market is shown as *not offered* and is never traded.
+- **FX/CFD prices are mid prices and volume is tick volume.** There is no exchange tape for OTC markets,
+  so VWAP and relative volume mean something different than for stocks, and fills happen at the bid/ask
+  (the spread is a real cost the mid chart does not show). Overnight financing is charged by OANDA and
+  included in its P&L figures.
+- **A stop is not a guarantee.** In a gap or a halted market a stop can fill at a worse price, and
+  leveraged products can lose money quickly. The stop, the per-trade risk cap and the daily-loss limit
+  reduce that risk; they do not remove it.
 
 - **Not yet exercised against the real Alpaca servers.** This build environment had no network access
   to Alpaca.

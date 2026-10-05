@@ -15,7 +15,8 @@ export function Vault() {
       title="The Vault"
       meta={
         <span className="flex items-center gap-1.5">
-          ALPACA <span className="num !text-fg-2">{a.accountNumberMasked ?? '—'}</span>
+          {a.broker} <span className="num !text-fg-2">{a.accountNumberMasked ?? '—'}</span>
+          {a.venue === 'oanda' && a.currency && <span className="num !text-fg-3">{a.currency}</span>}
         </span>
       }
       accent={a.dayPnl !== null && a.dayPnl < 0 ? 'var(--color-put)' : 'var(--color-call)'}
@@ -32,12 +33,25 @@ export function Vault() {
         </div>
       </button>
       <div className="mt-3 grid grid-cols-2 gap-x-4 gap-y-2.5 border-t border-line pt-2.5">
-        <Stat label="Buying power">
-          <Money value={a.buyingPower} />
-        </Stat>
-        <Stat label="Options BP">
-          <Money value={a.optionsBuyingPower} />
-        </Stat>
+        {a.venue === 'oanda' ? (
+          <>
+            <Stat label="Margin free">
+              <Money value={a.marginAvailable} />
+            </Stat>
+            <Stat label="Margin used">
+              <Money value={a.marginUsed} />
+            </Stat>
+          </>
+        ) : (
+          <>
+            <Stat label="Buying power">
+              <Money value={a.buyingPower} />
+            </Stat>
+            <Stat label="Options BP">
+              <Money value={a.optionsBuyingPower} />
+            </Stat>
+          </>
+        )}
         <Stat label="Positions">
           <span className="text-[13px]">{positions}</span>
         </Stat>
@@ -48,9 +62,14 @@ export function Vault() {
           </span>
         </Stat>
       </div>
+      {a.venue === 'oanda' && a.marginCloseoutPct !== null && a.marginCloseoutPct >= 50 && (
+        <div className="mt-2 border-l-2 border-put px-2 py-1 text-[11px] text-put">
+          MARGIN CLOSEOUT AT {a.marginCloseoutPct.toFixed(0)}% — OANDA closes positions at 100%
+        </div>
+      )}
       {a.patternDayTrader !== null && a.equity !== null && a.equity < 25_000 && (a.multiplier ?? 1) > 1 && (
         <div className="mt-2 border-l-2 border-pending px-2 py-1 text-[11px] text-pending">
-          PDT: {a.daytradeCount ?? 0}/3 day trades used (equity under $25k)
+          PDT: {a.daytradeCount ?? 0}/3 day trades used (equity under {money(25_000, { compact: false }).replace('.00', '')})
         </div>
       )}
     </Panel>

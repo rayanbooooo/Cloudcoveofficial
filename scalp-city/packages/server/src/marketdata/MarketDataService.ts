@@ -174,7 +174,8 @@ export class MarketDataService {
       case 'quote': {
         const st = this.live.get(e.symbol);
         if (!st) return;
-        const key = `${e.symbol}|${e.t}|${e.bid}|${e.ask}|${e.bidSize}|${e.askSize}`;
+        // `tradeable` is part of the key: a halt flag flipping on an otherwise identical price must not be dropped as a duplicate.
+        const key = `${e.symbol}|${e.t}|${e.bid}|${e.ask}|${e.bidSize}|${e.askSize}|${e.tradeable ?? ''}`;
         if (!this.quoteKeys.add(key)) return;
         this.lastStockMessageAt = this.clock.now();
         if (st.quoteAt === null || e.t >= st.quoteAt) {

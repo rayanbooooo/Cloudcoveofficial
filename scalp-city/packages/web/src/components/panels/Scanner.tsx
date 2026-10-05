@@ -1,11 +1,15 @@
-import type { ConditionResult, WorkerView } from '@scalp-city/shared';
-import { countdown, humanize } from '../../lib/format';
+import { directionLabel, type ConditionResult, type WorkerView } from '@scalp-city/shared';
+import { countdown, humanize, money, px, qtyStr, unitsStr } from '../../lib/format';
 import { serverNow, useStore } from '../../store/store';
 import { ChargeBar, Check, cx, Panel } from '../ui';
 
 const RISK_LABELS: Record<string, string> = {
   data_fresh: 'Data',
   account: 'Account',
+  margin: 'Margin',
+  risk_per_trade: 'Risk at stop',
+  stop_side: 'Stop placement',
+  instrument: 'Instrument',
   buying_power: 'Buying power',
   liquidity: 'Liquidity',
   max_positions: 'Position limit',
@@ -13,6 +17,33 @@ const RISK_LABELS: Record<string, string> = {
   market_open: 'Market open',
   broker: 'Broker',
 };
+
+/** CFD workers: what the next entry would be, sized from the live price and ATR — and why not, when it can't be. */
+function SizingLine({ w }: { w: WorkerView }) {
+  const m = w.market!;
+  const sym = w.config.symbol;
+  const pos = w.position;
+  return (
+    <div className="border-t border-line pt-1.5" title="Size = what you are willing to lose at the stop ÷ stop distance, rounded down to the broker's unit step, then capped by the notional and margin limits.">
+      <div className="label mb-0.5 flex justify-between">
+        <span>Next entry</span>
+        <span className="num !text-fg-2">{m.tradeable === false ? 'MARKET CLOSED' : m.tradeable === null ? 'no price yet' : 'tradeable'}</span>
+      </div>
+      {pos ? (
+        <div className="num text-[11px] text-fg-2">
+          holding {unitsStr(Math.abs(pos.qty))} · stop {pos.stopPrice === null ? <span className="text-pending">none at broker</span> : px(sym, pos.stopPrice)}
+          {pos.targetPrice !== null ? ` · target ${px(sym, pos.targetPrice)}` : ''}
+        </div>
+      ) : m.plannedUnits !== null ? (
+        <div className="num text-[11px] text-fg-2">
+          {unitsStr(m.plannedUnits)} · stop {m.plannedStop === null ? '—' : px(sym, m.plannedStop)} away · target {m.plannedTarget === null ? '—' : px(sym, m.plannedTarget)} away · risks ≤ {money(w.config.limits.riskPerTrade)}
+        </div>
+      ) : (
+        <div className="text-[11px] text-pending">{m.sizingNote ?? 'size unavailable'}</div>
+      )}
+    </div>
+  );
+}
 
 export function pickScannerWorker(workers: Record<string, WorkerView>, selected: string | null): WorkerView | null {
   if (selected && workers[selected]) return workers[selected]!;
@@ -47,6 +78,7 @@ export function Scanner({ workerId, embedded }: { workerId?: string | null; embe
   // The forming-bar preview is shown separately and labelled as such.
   const dir = sig.direction;
   const color = dir === 'CALL' ? 'var(--color-call)' : dir === 'PUT' ? 'var(--color-put)' : 'var(--color-signal)';
+  const dirText = (d: typeof dir) => directionLabel(d, w.config.instrument);
   const preview = sig.live;
   const previewColor = preview?.direction === 'CALL' ? 'var(--color-call)' : preview?.direction === 'PUT' ? 'var(--color-put)' : 'var(--color-fg-2)';
   const order = w.activeOrderId ? orders[w.activeOrderId] : null;
@@ -59,9 +91,9 @@ export function Scanner({ workerId, embedded }: { workerId?: string | null; embe
       <div className="flex items-baseline justify-between">
         <div className="flex items-baseline gap-2">
           <span className="display text-[18px]" style={{ color }}>
-            {dir === 'NEUTRAL' ? 'NO SETUP' : dir}
+            {dir === 'NEUTRAL' ? 'NO SETUP' : dirText(dir)}
           </span>
-          <span className="label">{w.config.symbol} · {w.config.timeframe.replace('Min', 'm')}</span>
+          <span className="label">{w.market?.displayName ?? w.config.symbol} · {w.config.timeframe.replace('Min', 'm')}</span>
         </div>
         <span className="label-strong text-[11px]" style={{ color: sig.phase === 'READY' ? 'var(--color-call)' : 'var(--color-fg-2)' }}>
           {sig.phase === 'READY' ? 'READY' : humanize(sig.phase)}
@@ -87,13 +119,14 @@ export function Scanner({ workerId, embedded }: { workerId?: string | null; embe
             <span>
               forming bar preview:{' '}
               <span className="num" style={{ color: previewColor }}>
-                {preview.direction === 'NEUTRAL' ? 'no setup' : `${preview.direction} ${preview.charge}%`}
+                {preview.direction === 'NEUTRAL' ? 'no setup' : `${dirText(preview.direction)} ${preview.charge}%`}
               </span>
             </span>
             <span>{sig.consumed ? 'signal used' : 'preview never trades'}</span>
           </div>
         )}
       </div>
+      {w.market && <SizingLine w={w} />}
       {risk && (
         <div className="border-t border-line pt-1.5">
           <div className="label mb-1 flex justify-between">
@@ -114,7 +147,7 @@ export function Scanner({ workerId, embedded }: { workerId?: string | null; embe
         <div className="flex items-center justify-between border-t border-line pt-1.5">
           <span className="label">{order.purpose === 'ENTRY' ? 'Entry' : 'Exit'} order</span>
           <span className="label-strong text-[11px]" style={{ color: order.state === 'FILLED' ? 'var(--color-call)' : 'var(--color-pending)' }}>
-            {humanize(order.state)} · {order.filledQty}/{order.qty}
+            {humanize(order.state)} · {qtyStr(order.filledQty)}/{qtyStr(order.qty)}
           </span>
         </div>
       )}

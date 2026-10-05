@@ -2,7 +2,7 @@ import { Html } from '@react-three/drei';
 import { useFrame, type ThreeEvent } from '@react-three/fiber';
 import { useEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
-import type { TowerState, WorkerView } from '@scalp-city/shared';
+import { directionLabel, type TowerState, type WorkerView } from '@scalp-city/shared';
 import { directionColor } from '../components/panels/Workers';
 import { cx } from '../components/ui';
 import { money, pnlClass } from '../lib/format';
@@ -200,6 +200,7 @@ function TowerBody({
   ];
   const pnl = w.stats.pnlToday;
   const dir = w.position?.direction ?? w.signal.direction;
+  const dirText = directionLabel(dir, w.config.instrument);
   const holding = w.position !== null || w.activeOrderId !== null;
 
   return (
@@ -292,7 +293,7 @@ function TowerBody({
             </div>
             <div className="mt-0.5 flex items-baseline justify-between gap-2">
               <span className={cx('num text-[11.5px]', pnlClass(pnl))}>{pnl === null ? '—' : money(pnl, { sign: true })}</span>
-              <span className="num text-[9.5px] text-fg-2">{holding ? (dir === 'NEUTRAL' ? '' : dir) : dir === 'NEUTRAL' ? 'NO SETUP' : `${dir} ${Math.round(w.signal.charge)}%`}</span>
+              <span className="num text-[9.5px] text-fg-2">{holding ? (dir === 'NEUTRAL' ? '' : dirText) : dir === 'NEUTRAL' ? 'NO SETUP' : `${dirText} ${Math.round(w.signal.charge)}%`}</span>
             </div>
           </button>
         )}

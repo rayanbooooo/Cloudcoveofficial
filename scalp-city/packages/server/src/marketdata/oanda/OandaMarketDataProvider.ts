@@ -1,5 +1,5 @@
 import type { Bar, OptionsFeed, StockFeed } from '@scalp-city/shared';
-import { num, oandaTime, type Raw } from '../../broker/oanda/mappers.js';
+import { num, oandaTime, priceTradeable, type Raw } from '../../broker/oanda/mappers.js';
 import { OandaHttp } from '../../broker/oanda/OandaHttp.js';
 import { OandaStream } from '../../broker/oanda/OandaStream.js';
 import type { StreamStatus, Unsubscribe } from '../../broker/types.js';
@@ -148,7 +148,7 @@ export class OandaMarketDataProvider implements MarketDataProvider {
     const bid = num(m.bids?.[0]?.price);
     const ask = num(m.asks?.[0]?.price);
     if (!symbol || t === null || bid === null || ask === null) return;
-    const tradeable = m.tradeable !== false;
+    const tradeable = priceTradeable(m);
     this.emit({
       kind: 'quote',
       symbol,
@@ -255,7 +255,7 @@ export class OandaMarketDataProvider implements MarketDataProvider {
         symbol,
         prevClose: null,
         latestTrade: bid !== null && ask !== null && t !== null ? { price: (bid + ask) / 2, t } : null,
-        latestQuote: bid !== null && ask !== null && t !== null ? { bid, ask, t, tradeable: p.tradeable !== false } : null,
+        latestQuote: bid !== null && ask !== null && t !== null ? { bid, ask, t, tradeable: priceTradeable(p) } : null,
       };
     }
     // Previous close: the last complete daily candle (17:00 New York roll, as OANDA's day is defined).
