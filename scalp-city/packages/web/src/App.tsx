@@ -124,9 +124,10 @@ function MobileLayout() {
 
 export function App() {
   const session = useStore((s) => s.session);
+  const bootNote = useStore((s) => s.bootNote);
   const ready = useStore((s) => s.ready);
   const mobile = useIsMobile();
-  if (!session) return <Loading label="Connecting…" />;
+  if (!session) return <Loading label={bootNote ?? 'Connecting…'} />;
   if (!session.authenticated) return <Login />;
   if (!ready) return <Loading label="Loading trading state…" />;
   return mobile ? <MobileLayout /> : <DesktopLayout />;

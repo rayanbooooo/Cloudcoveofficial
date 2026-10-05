@@ -44,6 +44,8 @@ export interface Toast extends AlertView {
 
 interface State {
   session: { authenticated: boolean; username: string | null; hasUsers: boolean } | null;
+  /** Shown on the connecting screen while the server is not answering yet. */
+  bootNote: string | null;
   conn: ConnState;
   ready: boolean;
   system: SystemView | null;
@@ -67,6 +69,7 @@ interface State {
   };
   apply(msg: ServerMessage): 'ok' | 'gap';
   setSession(s: State['session']): void;
+  setBootNote(note: string | null): void;
   setConn(c: Partial<ConnState>): void;
   selectWorker(id: string | null): void;
   openDrawer(d: DrawerId | null): void;
@@ -114,6 +117,7 @@ function applySnapshot(s: Snapshot): Partial<State> {
 
 export const useStore = create<State>((set, get) => ({
   session: null,
+  bootNote: null,
   conn: { state: 'connecting', lastSeq: 0, serverOffset: 0, lastMessageAt: 0 },
   ready: false,
   system: null,
@@ -200,6 +204,7 @@ export const useStore = create<State>((set, get) => ({
   },
 
   setSession: (session) => set({ session }),
+  setBootNote: (bootNote) => set({ bootNote }),
   setConn: (c) => set({ conn: { ...get().conn, ...c } }),
   selectWorker: (id) => set({ ui: { ...get().ui, selectedWorker: id } }),
   openDrawer: (d) => set({ ui: { ...get().ui, drawer: d } }),

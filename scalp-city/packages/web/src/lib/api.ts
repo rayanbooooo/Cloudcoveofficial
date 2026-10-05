@@ -41,13 +41,37 @@ export function setUnauthorizedHandler(fn: () => void): void {
   onUnauthorized = fn;
 }
 
+/** The server (or its host) is not answering with data: starting up, restarting, or the wrong address. */
+export function isUnavailable(err: unknown): boolean {
+  return err instanceof ApiError && (err.code === 'UNAVAILABLE' || err.code === 'UNREACHABLE');
+}
+
 async function call<T>(method: string, path: string, body?: unknown): Promise<T> {
   const headers: Record<string, string> = { Accept: 'application/json' };
   if (body !== undefined) headers['Content-Type'] = 'application/json';
   if (method !== 'GET' && csrfToken) headers['x-csrf-token'] = csrfToken;
-  const res = await fetch(path, { method, headers, credentials: 'same-origin', body: body === undefined ? undefined : JSON.stringify(body) });
+  let res: Response;
+  try {
+    res = await fetch(path, { method, headers, credentials: 'same-origin', body: body === undefined ? undefined : JSON.stringify(body) });
+  } catch {
+    throw new ApiError(0, 'UNREACHABLE', 'Cannot reach the server. Check your connection and try again.');
+  }
   const text = await res.text();
-  const data = text ? JSON.parse(text) : null;
+  let data: { error?: string; message?: string } | null = null;
+  if (text) {
+    try {
+      data = JSON.parse(text);
+    } catch {
+      // A web page where data was expected: the server's "starting up" page while the previous instance
+      // finishes after a deploy, the host's error page, or an address that is not the Scalp City server.
+      const restarting = res.status === 502 || res.status === 503 || res.status === 504;
+      throw new ApiError(
+        res.status,
+        'UNAVAILABLE',
+        restarting ? 'The server is starting up or restarting. Wait a minute and try again.' : `The server answered with a web page instead of data (HTTP ${res.status}). It may still be starting up, or this is not the Scalp City server address.`,
+      );
+    }
+  }
   if (!res.ok) {
     if (res.status === 401 && path !== '/api/auth/login') onUnauthorized?.();
     throw new ApiError(res.status, data?.error ?? 'ERROR', data?.message ?? `HTTP ${res.status}`);
