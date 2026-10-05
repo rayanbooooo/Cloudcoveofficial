@@ -5,6 +5,13 @@ import { systemClock } from './core/clock.js';
 import { createLogger } from './core/logger.js';
 import { PgDb } from './db/db.js';
 import { App } from './system/App.js';
+import { InstanceLock, startStandbyServer } from './system/InstanceLock.js';
+
+/** Where people open the app (hosting platforms publish it in the environment). */
+function publicUrl(host: string, port: number): string {
+  const railway = process.env.RAILWAY_PUBLIC_DOMAIN ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}` : undefined;
+  return process.env.PUBLIC_URL ?? process.env.RENDER_EXTERNAL_URL ?? railway ?? `http://${host === '0.0.0.0' ? '127.0.0.1' : host}:${port}`;
+}
 
 async function main(): Promise<void> {
   loadEnvFile();
@@ -25,6 +32,33 @@ async function main(): Promise<void> {
     logger.fatal('cannot connect to PostgreSQL — check DATABASE_URL (see README: npm run db:up)');
     process.exit(1);
   }
+
+  // Only one process may trade against this database (and so this account).
+  // A second instance (zero-downtime deploy, wrong instance count) waits in
+  // standby — answering health checks, never trading — until the lock frees.
+  let trading = false;
+  const early = () => {
+    if (!trading) process.exit(0);
+  };
+  process.on('SIGINT', early);
+  process.on('SIGTERM', early);
+  const lock = new InstanceLock(config.databaseUrl, (reason) => {
+    logger.fatal({ reason }, 'lost the single-instance trading lock — exiting so the platform restarts this process cleanly');
+    process.exit(1);
+  });
+  let standby: { close(): Promise<void> } | null = null;
+  await lock.acquire({
+    onWait: async () => {
+      logger.warn('another Scalp City instance is trading against this database — standing by (no trading) until it stops');
+      standby = await startStandbyServer(config.host, config.port);
+    },
+    onError: (err) => logger.warn({ err: err.message }, 'trading lock attempt failed; retrying'),
+  });
+  if (standby) await (standby as { close(): Promise<void> }).close();
+  trading = true;
+  process.off('SIGINT', early);
+  process.off('SIGTERM', early);
+  logger.info('trading lock acquired: this is the only instance trading against this database');
 
   const app = new App({ config, db, clock: systemClock, logger });
   await app.init();
@@ -50,7 +84,7 @@ async function main(): Promise<void> {
     for (const l of [
       '',
       '  ⚑ FIRST RUN: no account exists yet.',
-      `    Open http://${config.host}:${config.port} and create your account with setup code:  ${app.setupCode}`,
+      `    Open ${publicUrl(config.host, config.port)} and create your account with setup code:  ${app.setupCode}`,
       '    (single use; it stops working once the account exists. Alternative: npm run user:create)',
       '',
     ])
@@ -66,6 +100,7 @@ async function main(): Promise<void> {
       await fastify.close();
       await app.shutdown();
       await db.close();
+      await lock.release();
     } finally {
       process.exit(0);
     }

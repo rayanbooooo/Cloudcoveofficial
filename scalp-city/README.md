@@ -70,6 +70,12 @@ First paper session checklist:
 
 ## Going LIVE (only after paper is stable)
 
+**Step-by-step deployment and go-live guide: [GO_LIVE.md](GO_LIVE.md).** In short, deploy the Docker
+image (`Dockerfile`; a Render Blueprint is in the repository root as `render.yaml`) on an always-on
+host with PostgreSQL, prove one paper round trip, then arm LIVE with small limits. Run exactly one
+instance per database: a second instance waits in standby (Postgres advisory lock) and never trades,
+so a zero-downtime deploy can't double-trade the account.
+
 LIVE needs four independent gates. Any one of them missing means no live order:
 
 | Gate | Where | Notes |
@@ -178,7 +184,8 @@ panels anyway.
 ## Tests
 
 ```bash
-npm test         # 129 tests (31 shared + 98 server), ~30 s, no network, no database server needed
+npm test         # 136 tests (31 shared + 105 server), ~30 s, no network, no database server needed
+TEST_DATABASE_URL=postgres://… npm test   # also runs the 2 single-instance-lock tests against a real PostgreSQL
 npm run typecheck
 ```
 

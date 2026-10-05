@@ -1,0 +1,82 @@
+# Render Blueprint for Scalp City (scalp-city/). Creates one always-on Docker
+# web service and one PostgreSQL database. See scalp-city/GO_LIVE.md.
+#
+# Written to Render's documented Blueprint format (render.com/docs/blueprint-spec)
+# but not validated against Render from the environment it was written in:
+# if Render reports a field or plan name as invalid, pick the equivalent in the
+# dashboard (web: always-on "Starter" or above; database: a paid plan — free
+# Render databases expire).
+#
+# Keep EXACTLY ONE instance. Scalp City refuses to let two instances trade the
+# same account (the second waits in standby), but never scale it out.
+services:
+  - type: web
+    name: scalp-city
+    runtime: docker
+    rootDir: scalp-city
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    # Change to main once this branch is merged.
+    branch: claude/zen-franklin-lzwngb
+    region: virginia # closest Render region to Alpaca's servers (US East)
+    plan: starter # always on; free instances sleep, which a trading bot cannot do
+    numInstances: 1
+    healthCheckPath: /api/healthz
+    # Deploy by hand, outside market hours: a deploy restarts the trader.
+    autoDeploy: false
+    envVars:
+      # Start in PAPER. Switching to LIVE happens later, deliberately (GO_LIVE.md).
+      - key: TRADING_ENVIRONMENT
+        value: paper
+      - key: LIVE_TRADING_ENABLED
+        value: "false"
+      # Secrets: Render asks for these when you create the Blueprint.
+      # Leave the LIVE pair empty until you are ready for real money.
+      - key: ALPACA_PAPER_API_KEY
+        sync: false
+      - key: ALPACA_PAPER_API_SECRET
+        sync: false
+      - key: ALPACA_LIVE_API_KEY
+        sync: false
+      - key: ALPACA_LIVE_API_SECRET
+        sync: false
+      # Market data: what your Alpaca plan includes. Live OPTIONS autotrading
+      # needs real-time OPRA (paid) — set ALPACA_OPTIONS_FEED=opra once subscribed.
+      - key: ALPACA_STOCK_FEED
+        value: iex
+      - key: ALPACA_OPTIONS_FEED
+        value: indicative
+      # Paper only (ignored in live): lets workers paper-trade options on the free feed.
+      - key: PAPER_ALLOW_INDICATIVE_OPTIONS
+        value: "true"
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: DATABASE_URL
+        fromDatabase:
+          name: scalp-city-db
+          property: connectionString
+      # Deliberately small starting limits. They seed the risk settings on first
+      # boot; raise them later in the app (Risk drawer) once results justify it.
+      - key: MAX_DAILY_LOSS
+        value: "100"
+      - key: MAX_POSITION_SIZE
+        value: "300"
+      - key: MAX_ORDER_NOTIONAL
+        value: "300"
+      - key: MAX_CONTRACTS
+        value: "1"
+      - key: MAX_SHARES
+        value: "10"
+      - key: MAX_CONCURRENT_POSITIONS
+        value: "1"
+      - key: MAX_TRADES_PER_DAY
+        value: "3"
+
+databases:
+  - name: scalp-city-db
+    databaseName: scalp_city
+    user: scalp
+    plan: basic-256mb
+    region: virginia
+    postgresMajorVersion: "16"
+    ipAllowList: [] # no outside access; only the web service connects
