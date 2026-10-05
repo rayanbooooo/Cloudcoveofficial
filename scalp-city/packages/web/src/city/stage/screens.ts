@@ -230,6 +230,8 @@ export function drawPositionScreen(ctx: CanvasRenderingContext2D, d: ScreenData,
     const isOption = pos.assetClass === 'us_option';
     const col = isOption ? (pos.option?.type === 'put' ? C.put : C.call) : long ? C.call : C.put;
     const qtyAbs = Math.abs(pos.qty);
+    // A CFD's stop is held by the broker; a share's stop is held by this server. Either way there is a plan to show.
+    const planned = cfd || pos.stopSource === 'server';
     const unit = isOption ? (qtyAbs === 1 ? 'contract' : 'contracts') : cfd ? (qtyAbs === 1 ? 'unit' : 'units') : qtyAbs === 1 ? 'share' : 'shares';
     text(ctx, isOption ? (pos.option?.type.toUpperCase() ?? 'LONG') : long ? 'LONG' : 'SHORT', 24, 146, { size: 84, weight: 800, color: col, font: DISPLAY });
     text(ctx, `${qtyStr(qtyAbs)} ${unit}`, 24, 186, { size: 28, color: C.dim });
@@ -272,9 +274,9 @@ export function drawPositionScreen(ctx: CanvasRenderingContext2D, d: ScreenData,
       ctx.stroke();
       text(ctx, label, x, above ? ly + 4 : ly + 90, { size: 22, weight: 800, color, align: 'center' });
     };
-    if (pos.stopPrice !== null && cfd) mark(pos.stopPrice, C.put, 'STOP', true);
+    if (pos.stopPrice !== null && planned) mark(pos.stopPrice, C.put, 'STOP', true);
     mark(pos.avgEntryPrice, C.white, 'ENTRY', false);
-    if (pos.targetPrice !== null && cfd) mark(pos.targetPrice, C.call, 'TARGET', true);
+    if (pos.targetPrice !== null && planned) mark(pos.targetPrice, C.call, 'TARGET', true);
     if (pos.markPrice !== null) {
       const x = xOf(pos.markPrice);
       ctx.fillStyle = C.amber;
@@ -286,9 +288,9 @@ export function drawPositionScreen(ctx: CanvasRenderingContext2D, d: ScreenData,
       ctx.fill();
       text(ctx, 'NOW', x, ly + 100, { size: 20, weight: 800, color: C.amber, align: 'center' });
     }
-    if (cfd) {
-      const held = pos.stopSource === 'broker';
-      text(ctx, held ? `stop ${pos.stopPrice === null ? '' : px(sym, pos.stopPrice) + ' '}is held by the broker` : 'NO STOP AT THE BROKER', 24, 372, { size: 22, color: held ? C.dim : C.amber, weight: 700 });
+    if (planned) {
+      const holder = pos.stopSource === 'broker' ? 'the broker' : pos.stopSource === 'server' ? 'this server' : null;
+      text(ctx, holder ? `stop ${pos.stopPrice === null ? '' : px(sym, pos.stopPrice) + ' '}is held by ${holder}` : 'NO STOP AT THE BROKER', 24, 372, { size: 22, color: holder ? C.dim : C.amber, weight: 700 });
       if (pos.riskAtStop !== null) text(ctx, `loses ${money(pos.riskAtStop)} if stopped`, W - 24, 372, { size: 22, color: C.dim, align: 'right' });
     }
   } else if (o && (w.towerState === 'ORDER_PENDING' || o.state === 'SUBMITTING' || o.state === 'SUBMITTED' || o.state === 'ACCEPTED')) {

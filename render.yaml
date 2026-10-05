@@ -60,22 +60,28 @@ services:
         fromDatabase:
           name: scalp-city-db
           property: connectionString
-      # Deliberately small starting limits for ALPACA (BROKER=alpaca). They seed the
-      # risk settings on first boot; raise them later in the app (Risk drawer).
+      # Which Alpaca workers run: etf = shares of GLD (gold), QQQ (Nasdaq), DIA (US30), FXB (GBPUSD)
+      # and FXE (euro); options = the original QQQ/SPY/IWM options workers.
+      - key: ALPACA_WORKER_SET
+        value: etf
+      # Deliberately small starting limits. They seed the risk settings on FIRST boot only; after
+      # that the app's Risk drawer is the source of truth (an existing deployment keeps what it
+      # stored, so raise "position size" there if share entries report that one share is over the limit).
+      # Position size must cover at least one share: QQQ costs several hundred dollars.
       - key: MAX_DAILY_LOSS
         value: "100"
       - key: MAX_POSITION_SIZE
-        value: "300"
+        value: "1000"
       - key: MAX_ORDER_NOTIONAL
-        value: "300"
+        value: "1000"
       - key: MAX_CONTRACTS
         value: "1"
       - key: MAX_SHARES
-        value: "10"
+        value: "50"
       - key: MAX_CONCURRENT_POSITIONS
-        value: "1"
+        value: "2"
       - key: MAX_TRADES_PER_DAY
-        value: "3"
+        value: "6"
 
 databases:
   - name: scalp-city-db

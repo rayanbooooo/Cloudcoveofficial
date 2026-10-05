@@ -176,6 +176,7 @@ export class PositionLedger {
           dailyPnlBefore: order.meta.dailyPnlBefore ?? ctx.dailyPnl,
           exitPlan: order.meta.exitPlan ?? null,
           protectiveStop: order.meta.protectiveStop ?? null,
+          softStop: order.meta.softStop ?? null,
           riskAtStop: order.meta.riskAtStop ?? null,
         },
         exitReason: null,

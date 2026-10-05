@@ -47,6 +47,8 @@ export interface OrderMeta {
   exitPlan?: ExitPlan | null;
   /** CFD opens: stop loss placed at the broker together with this order. */
   protectiveStop?: { price: number } | null;
+  /** Share entries: the stop this SERVER enforces (nothing is placed at the broker). */
+  softStop?: { price: number } | null;
   /** Worst-case loss at the protective stop (account currency), as approved by risk. */
   riskAtStop?: number | null;
   /** PROTECTIVE_STOP orders: client order id of the entry they protect. */

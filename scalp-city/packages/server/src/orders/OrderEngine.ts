@@ -100,6 +100,14 @@ export function validateOrder(o: OrderRecord): string | null {
       return `protective stop ${stop} is on the wrong side of the ${o.side} price ${o.limitPrice}`;
     }
   }
+  const soft = o.meta.softStop?.price;
+  if (soft !== undefined && soft !== null) {
+    if (o.assetClass !== 'us_equity') return 'a server-held stop is only supported for share orders';
+    if (!(soft > 0)) return 'stop must be a positive price';
+    if (o.limitPrice !== null && (o.side === 'buy' ? soft >= o.limitPrice : soft <= o.limitPrice)) {
+      return `stop ${soft} is on the wrong side of the ${o.side} price ${o.limitPrice}`;
+    }
+  }
   return null;
 }
 
@@ -320,6 +328,7 @@ export class OrderEngine {
       multiplier: o.meta.multiplier,
       referencePrice: req.referencePrice ?? null,
       protectiveStop: o.meta.protectiveStop?.price ?? null,
+      softStop: o.meta.softStop?.price ?? null,
     };
   }
 

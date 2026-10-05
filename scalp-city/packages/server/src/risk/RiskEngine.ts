@@ -41,6 +41,8 @@ export interface ProposedOrder {
   referencePrice: number | null;
   /** CFD opens: stop loss price placed at the broker with the order. */
   protectiveStop?: number | null;
+  /** Share entries: the stop this server enforces (not placed at the broker). */
+  softStop?: number | null;
 }
 
 /** Instrument and margin facts for a CFD order (OANDA). */
@@ -330,6 +332,13 @@ export function evaluateRisk(o: ProposedOrder, s: RiskState): RiskDecisionView {
         const shortOk = a !== null && a.shortable && a.easyToBorrow && s.account?.shortingEnabled === true && (o.source !== 'WORKER' || s.worker?.config.allowShort === true);
         c.add('short', 'Short sale', shortOk, shortOk ? 'shortable, easy to borrow' : 'short selling not permitted for this order');
       }
+      const soft = o.softStop ?? null;
+      if (soft !== null) {
+        const sideOk = ref !== null && (o.side === 'buy' ? soft < ref : soft > ref);
+        c.add('stop_side', 'Stop placement', sideOk, ref === null ? 'no live price to check the stop against' : `stop ${soft} vs live ${ref}${sideOk ? '' : ' — wrong side'}`);
+      } else if (automated) {
+        c.add('stop_present', 'Stop loss', false, 'automated share entries must carry a stop loss');
+      }
     }
 
     // Size (account currency). For CFDs the multiplier is the live quote→home conversion.
@@ -375,6 +384,11 @@ export function evaluateRisk(o: ProposedOrder, s: RiskState): RiskDecisionView {
       const held = existing?.qty ?? 0;
       const cap = Math.min(L.maxShares, s.worker?.config.limits.maxShares ?? Infinity);
       c.add('max_shares', 'Shares', held + o.qty <= cap, `${held + o.qty} (max ${cap})`);
+      const soft = o.softStop ?? null;
+      if (soft !== null && price !== null) {
+        const atStop = o.qty * Math.abs(price - soft);
+        c.add('risk_per_trade', 'Risk at stop', atStop <= L.maxRiskPerTrade, `${money(atStop)} if the stop is hit (max ${money(L.maxRiskPerTrade)})`);
+      }
     }
 
     if (!isCfd) {

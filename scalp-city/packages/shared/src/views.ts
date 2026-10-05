@@ -292,9 +292,13 @@ export interface WorkerPositionView {
   openedAt: number;
   tradeId: string;
   option: OptionContractInfo | null;
-  /** CFD positions: the stop OANDA holds for this position (null = none active), the plan's target, and the loss if the stop is hit. */
+  /**
+   * Stop and target of a CFD or share position, and the loss if the stop is hit. `stopSource` says who
+   * holds the stop: the broker (OANDA, protects the position even if this server is down) or this
+   * server (shares: only protects while the server is running).
+   */
   stopPrice: number | null;
-  stopSource: 'broker' | null;
+  stopSource: 'broker' | 'server' | null;
   targetPrice: number | null;
   riskAtStop: number | null;
 }

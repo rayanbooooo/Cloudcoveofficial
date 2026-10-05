@@ -75,6 +75,8 @@ export interface WorkerDeps {
 }
 
 type EntryRequest = OrderRequest & { signalBarCloseAt: number; referencePrice: number | null };
+/** The parts of an entry every instrument shares; the instrument-specific builder adds the rest. */
+type EntryCommon = Omit<EntryRequest, 'symbol' | 'underlying' | 'assetClass' | 'side' | 'positionIntent' | 'type' | 'qty' | 'limitPrice' | 'meta' | 'referencePrice'>;
 
 /** Round to the instrument's tick (penny increments for options and stocks ≥ $1). */
 export function roundToTick(price: number, isOption: boolean, direction: 'up' | 'down'): number {
@@ -286,7 +288,7 @@ export class Worker {
   }
 
   /** Build a CFD entry, or explain why there can't be one. */
-  private async cfdEntry(direction: SignalDirection, common: Omit<EntryRequest, 'symbol' | 'underlying' | 'assetClass' | 'side' | 'positionIntent' | 'type' | 'qty' | 'limitPrice' | 'meta' | 'referencePrice'>, signalMeta: { charge: number; conditions: unknown[] }): Promise<EntryRequest | string> {
+  private async cfdEntry(direction: SignalDirection, common: EntryCommon, signalMeta: { charge: number; conditions: unknown[] }): Promise<EntryRequest | string> {
     const sym = this.config.symbol;
     await this.d.instruments.ensure();
     const spec = this.d.instruments.get(sym);
@@ -330,6 +332,69 @@ export class Worker {
         exitPlan: plan,
         protectiveStop: { price: stopPrice },
         riskAtStop: size.units * worstStop * factor,
+      },
+      referencePrice: ref,
+    };
+  }
+
+  /**
+   * Share size: risk-based (loss at the stop <= riskPerTrade), then capped by the notional and share
+   * limits, rounded DOWN to whole shares.
+   */
+  private shareSize(price: number, stopDistance: number): { qty: number; note: string | null } {
+    const L = this.config.limits;
+    const risk = Math.min(L.riskPerTrade, this.d.maxRiskPerTrade());
+    const notionalCap = Math.min(L.maxPositionNotional, this.d.maxPositionNotional(), this.d.maxOrderNotional());
+    const shareCap = Math.min(L.maxShares, this.d.maxShares());
+    const byRisk = Math.floor(risk / stopDistance);
+    const byNotional = Math.floor(notionalCap / price);
+    const qty = Math.max(0, Math.min(byRisk, byNotional, shareCap));
+    if (qty >= 1) return { qty, note: null };
+    if (byNotional < 1) return { qty: 0, note: `size: one share costs ${this.money(price)}, over the ${this.money(notionalCap)} position limit — raise the position limit in the Risk drawer` };
+    if (byRisk < 1) return { qty: 0, note: `size: one share loses ${this.money(stopDistance)} at the stop, over the ${this.money(risk)} risk-per-trade limit` };
+    return { qty: 0, note: `size: the share limit is ${shareCap}` };
+  }
+
+  /**
+   * Build a share entry (long, or short when the worker allows it), or explain why there can't be one.
+   * The stop comes from the live ATR and is enforced by this server; nothing is placed at the broker.
+   */
+  private equityEntry(direction: SignalDirection, common: EntryCommon, signalMeta: { charge: number; conditions: unknown[] }): EntryRequest | string {
+    const sym = this.config.symbol;
+    const st = this.d.marketData.state(sym);
+    if (!st || st.bid === null || st.ask === null || !(st.bid > 0) || !(st.ask >= st.bid)) return 'no live bid/ask';
+    const side = direction === 'CALL' ? 'buy' : 'sell';
+    if (side === 'sell' && !this.config.allowShort) return 'SHORT signal — short selling is off for this worker';
+    const spread = st.ask - st.bid;
+    const plan = this.exitPlan(spread);
+    if (!plan) return 'ATR not ready — cannot place a stop yet';
+    if (spread > plan.stopDistance * 0.35) return `spread ${this.money(spread)} is too wide for a ${this.money(plan.stopDistance)} stop`;
+    const ref = side === 'buy' ? st.ask : st.bid;
+    // Worst acceptable fill: the slippage allowance, but never more than a quarter of the stop.
+    const slip = Math.min((ref * this.config.entrySlippagePct) / 100, plan.stopDistance * 0.25);
+    const bound = roundToTick(side === 'buy' ? ref + slip : ref - slip, false, side === 'buy' ? 'up' : 'down');
+    const stopPrice = roundToTick(side === 'buy' ? ref - plan.stopDistance : ref + plan.stopDistance, false, side === 'buy' ? 'down' : 'up');
+    const worstStop = Math.abs(bound - stopPrice);
+    const size = this.shareSize(bound, worstStop);
+    if (size.qty < 1) return size.note ?? 'size unavailable';
+    return {
+      ...common,
+      symbol: sym,
+      underlying: sym,
+      assetClass: 'us_equity',
+      side,
+      positionIntent: null,
+      type: 'limit',
+      qty: size.qty,
+      limitPrice: bound,
+      meta: {
+        multiplier: 1,
+        direction,
+        signal: signalMeta,
+        quote: { bid: st.bid, ask: st.ask, at: st.quoteAt },
+        exitPlan: plan,
+        softStop: { price: stopPrice },
+        riskAtStop: size.qty * worstStop,
       },
       referencePrice: ref,
     };
@@ -429,26 +494,9 @@ export class Worker {
         if (typeof r === 'string') return this.block(r);
         req = r;
       } else {
-        if (direction === 'PUT' && !this.config.allowShort) return this.block('PUT signal — short selling disabled for this worker');
-        const side = direction === 'CALL' ? 'buy' : 'sell';
-        const ref = side === 'buy' ? (st?.ask ?? st?.last ?? null) : (st?.bid ?? st?.last ?? null);
-        if (ref === null) return this.block('no live quote');
-        const limit = roundToTick(side === 'buy' ? ref * (1 + this.config.entrySlippagePct / 100) : ref * (1 - this.config.entrySlippagePct / 100), false, side === 'buy' ? 'up' : 'down');
-        const qty = this.sizeFor(limit, 1);
-        if (qty < 1) return this.block(`size: one share at $${limit.toFixed(2)} exceeds position limits`);
-        req = {
-          ...common,
-          symbol: this.config.symbol,
-          underlying: this.config.symbol,
-          assetClass: 'us_equity',
-          side,
-          positionIntent: null,
-          type: 'limit',
-          qty,
-          limitPrice: limit,
-          meta: { multiplier: 1, direction, signal: signalMeta, quote: { bid: st?.bid ?? null, ask: st?.ask ?? null, at: st?.quoteAt ?? null } },
-          referencePrice: ref,
-        };
+        const r = this.equityEntry(direction, common, signalMeta);
+        if (typeof r === 'string') return this.block(r);
+        req = r;
       }
 
       // Dry run first: a transient block (e.g. one stale second) must not consume the signal.
@@ -534,15 +582,20 @@ export class Worker {
     return this.exitPlan();
   }
 
-  /** CFD exits are judged on the price we'd actually get: the bid for longs, the ask for shorts. */
-  private cfdExitReason(pos: LedgerPosition, now: number): { reason: string; urgent: boolean } | null {
+  /**
+   * Stop/target exits for CFD and share positions, judged on the price we'd actually get: the bid for
+   * longs, the ask for shorts. Shares have no broker-held stop: this is the only thing that stops them out.
+   */
+  private planExitReason(pos: LedgerPosition, now: number): { reason: string; urgent: boolean } | null {
     const st = this.d.marketData.state(pos.symbol);
     if (!st || st.bid === null || st.ask === null || this.d.marketData.freshness(pos.symbol).stale) return null;
     const x = this.config.exits;
     const long = pos.qty > 0;
     const exec = long ? st.bid : st.ask;
     if (!this.d.calendar.isOpen(now)) {
-      // Outside the trading window (e.g. after a restart): don't carry it — close while the broker allows.
+      // CFDs outside the trading window (e.g. after a restart): don't carry it — close while the broker allows.
+      // Shares can't trade outside the regular session; they are judged again at the next open.
+      if (pos.assetClass !== 'cfd') return null;
       return st.tradeable === false ? null : { reason: 'SESSION_CLOSED', urgent: true };
     }
     const toClose = this.d.calendar.minutesToClose(now);
@@ -562,9 +615,10 @@ export class Worker {
   private async manageExit(now: number): Promise<void> {
     const pos = this.position();
     if (!pos || this.exitOrderId || this.busy || now < this.exitBackoffUntil) return;
-    if (pos.assetClass === 'cfd') {
-      const r = this.cfdExitReason(pos, now);
-      if (r) await this.submitExit(pos, r.reason, r.urgent);
+    if (pos.assetClass === 'cfd' || pos.assetClass === 'us_equity') {
+      const r = this.planExitReason(pos, now);
+      // A limit exit that did not fill is repriced to market.
+      if (r) await this.submitExit(pos, r.reason, r.urgent || (this.exitReason?.includes('repriced') ?? false));
       return;
     }
     if (pos.assetClass === 'us_option') this.d.marketData.watchOptions(this.id, [pos.symbol]);
@@ -595,6 +649,7 @@ export class Worker {
     try {
       const isOption = pos.assetClass === 'us_option';
       const isCfd = pos.assetClass === 'cfd';
+      const isShares = pos.assetClass === 'us_equity';
       const side = pos.qty > 0 ? 'sell' : 'buy';
       let type: 'market' | 'limit' = 'market';
       let limitPrice: number | null = null;
@@ -604,6 +659,14 @@ export class Worker {
         if (px && px > 0) {
           type = 'limit';
           limitPrice = roundToTick(px, true, side === 'sell' ? 'down' : 'up');
+        }
+      } else if (isShares && !urgent) {
+        // Not urgent (target, time stop, VWAP loss): ask for the current bid/ask instead of crossing the spread blindly.
+        const st = this.d.marketData.state(pos.symbol);
+        const px = side === 'sell' ? st?.bid : st?.ask;
+        if (px && px > 0) {
+          type = 'limit';
+          limitPrice = roundToTick(px, false, side === 'sell' ? 'down' : 'up');
         }
       }
       let ref = this.markPrice(pos).price;
@@ -772,6 +835,18 @@ export class Worker {
     };
   }
 
+  /** The server-held stop for a share position, the plan's target, and the loss if the stop is hit. */
+  private shareProtection(pos: LedgerPosition): { stopPrice: number | null; targetPrice: number | null; riskAtStop: number | null } {
+    const sign = pos.qty > 0 ? 1 : -1;
+    const plan = this.planFor(pos);
+    if (!plan) return { stopPrice: null, targetPrice: null, riskAtStop: null };
+    return {
+      stopPrice: pos.avgPrice - sign * plan.stopDistance,
+      targetPrice: pos.avgPrice + sign * plan.targetDistance,
+      riskAtStop: Math.abs(pos.qty) * plan.stopDistance,
+    };
+  }
+
   private unmanagedWarning(): string | null {
     const pos = this.position();
     if (!pos) return null;
@@ -815,6 +890,7 @@ export class Worker {
       const { price } = this.markPrice(pos);
       const occ = parseOccSymbol(pos.symbol);
       const cfd = pos.assetClass === 'cfd' ? this.cfdProtection(pos) : null;
+      const shares = pos.assetClass === 'us_equity' ? this.shareProtection(pos) : null;
       position = {
         symbol: pos.symbol,
         assetClass: pos.assetClass,
@@ -827,10 +903,10 @@ export class Worker {
         openedAt: pos.openedAt,
         tradeId: pos.tradeId ?? '',
         option: occ ? { underlying: occ.root, expiration: occ.expiration, type: occ.type, strike: occ.strike } : null,
-        stopPrice: cfd?.stopPrice ?? null,
-        stopSource: cfd?.stopPrice != null ? 'broker' : null,
-        targetPrice: cfd?.targetPrice ?? null,
-        riskAtStop: cfd?.riskAtStop ?? null,
+        stopPrice: cfd?.stopPrice ?? shares?.stopPrice ?? null,
+        stopSource: cfd?.stopPrice != null ? 'broker' : shares?.stopPrice != null ? 'server' : null,
+        targetPrice: cfd?.targetPrice ?? shares?.targetPrice ?? null,
+        riskAtStop: cfd?.riskAtStop ?? shares?.riskAtStop ?? null,
       };
     }
     return {

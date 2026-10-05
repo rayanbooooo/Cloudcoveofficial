@@ -162,6 +162,7 @@ async function main(): Promise<void> {
     ALPACA_DATA_URL: fake.url,
     ALPACA_DATA_STREAM_URL: fake.wsUrl,
     ALPACA_OPTIONS_FEED: 'opra',
+    ALPACA_WORKER_SET: 'options',
     SESSION_SECRET: 'demo-harness-session-secret-not-for-production',
     DATABASE_URL: 'pglite://memory', // the harness passes its own in-memory database below
     MAX_POSITION_SIZE: '5000',

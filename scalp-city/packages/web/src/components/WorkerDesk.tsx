@@ -22,6 +22,8 @@ function PositionBlock({ w }: { w: WorkerView }) {
   const q = optionQuotes[p.symbol];
   const isOption = p.assetClass === 'us_option';
   const cfd = p.assetClass === 'cfd';
+  // Shares carry a stop too, but this server holds it (the broker does not).
+  const planned = cfd || p.stopSource === 'server';
   const long = p.qty > 0;
   const mult = isOption ? 100 : 1;
   const sym = p.symbol;
@@ -30,7 +32,7 @@ function PositionBlock({ w }: { w: WorkerView }) {
   const m = w.market;
   // Account-currency exposure: units × price × the broker's quote→account conversion.
   const exposure = cfd ? (p.markPrice !== null && m?.homeFactor != null ? p.markPrice * Math.abs(p.qty) * m.homeFactor : null) : p.markPrice === null ? null : p.markPrice * Math.abs(p.qty) * mult;
-  const stopDistance = cfd && p.stopPrice !== null ? Math.abs(p.avgEntryPrice - p.stopPrice) : null;
+  const stopDistance = planned && p.stopPrice !== null ? Math.abs(p.avgEntryPrice - p.stopPrice) : null;
   return (
     <div>
       <div className="flex items-baseline justify-between">
@@ -56,9 +58,9 @@ function PositionBlock({ w }: { w: WorkerView }) {
         <Row label="Average fill">{px(sym, p.avgEntryPrice)}</Row>
         <Row label="Current">{px(sym, p.markPrice)}</Row>
         <Row label="Market value">{money(exposure)}</Row>
-        {cfd && (
+        {planned && (
           <>
-            <Row label="Stop (held by OANDA)">
+            <Row label={cfd ? 'Stop (held by OANDA)' : 'Stop (held by this server)'}>
               {p.stopPrice === null ? <span className="text-pending">NONE</span> : <>{px(sym, p.stopPrice)}<span className="ml-1 text-[10.5px] text-fg-3">({px(sym, stopDistance)} away)</span></>}
             </Row>
             <Row label="Target (bot exits)">{p.targetPrice === null ? '—' : px(sym, p.targetPrice)}</Row>
@@ -71,6 +73,7 @@ function PositionBlock({ w }: { w: WorkerView }) {
         <Row label="Opened">{timeET(p.openedAt)}</Row>
       </div>
       {cfd && <div className="label mt-1 !text-[9.5px]">The stop lives at OANDA, so it still protects this position if this app or its server goes offline. The target is exited by the bot.</div>}
+      {!cfd && p.stopSource === 'server' && <div className="label mt-1 !text-[9.5px]">The stop and the target are enforced by this server, not placed at the broker: they only protect this position while the server is running.</div>}
       {q?.stale && <div className="label mt-1 !text-pending">Option quote stale — exits wait for live data</div>}
     </div>
   );

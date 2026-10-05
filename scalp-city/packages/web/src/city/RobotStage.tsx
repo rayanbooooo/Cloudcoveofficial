@@ -445,7 +445,7 @@ export function robotActivity(w: WorkerView): string {
       return 'Order sent — waiting for the broker to confirm';
     case 'IN_TRADE':
       return p
-        ? `In a ${directionLabel(p.direction, w.config.instrument)} trade · ${unitsStr(Math.abs(p.qty))}${p.stopSource === 'broker' ? ' · stop held by the broker' : ''}`
+        ? `In a ${directionLabel(p.direction, w.config.instrument)} trade · ${unitsStr(Math.abs(p.qty))}${p.stopSource === 'broker' ? ' · stop held by the broker' : p.stopSource === 'server' ? ' · stop held by this server' : ''}`
         : 'In a trade';
     case 'PROFIT':
       return 'Position closed in profit';
