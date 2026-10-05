@@ -112,6 +112,7 @@ function StreamRow({ label, s }: { label: string; s: StreamStatusView }) {
 /** System health (spec §89). */
 export function HealthDrawerBody() {
   const system = useStore((s) => s.system);
+  const usesOptions = useStore((s) => Object.values(s.workers).some((w) => w.config.instrument === 'OPTIONS'));
   if (!system) return null;
   const md = system.marketData;
   return (
@@ -141,7 +142,17 @@ export function HealthDrawerBody() {
           <>
             <StreamRow label="Broker order stream" s={system.broker.tradeStream} />
             <StreamRow label={`Stock data · ${md.stockFeed.toUpperCase()}`} s={md.stock} />
-            <StreamRow label={`Options data · ${md.optionsFeed.toUpperCase()}`} s={md.options} />
+            {usesOptions ? (
+              <StreamRow label={`Options data · ${md.optionsFeed.toUpperCase()}`} s={md.options} />
+            ) : (
+              <div className="flex items-center justify-between border-b border-line/50 py-1.5 last:border-b-0">
+                <span className="flex items-center gap-2">
+                  <Dot status="off" />
+                  <span className="label-strong text-[11px] text-fg-3">Options data</span>
+                </span>
+                <span className="num text-[11px] text-fg-3">not used by the share workers</span>
+              </div>
+            )}
           </>
         )}
       </section>
@@ -154,7 +165,7 @@ export function HealthDrawerBody() {
         ))}
         <div className="label mt-2">
           {md.stockFeedLabel}
-          {system.venue === 'oanda' ? ' · mid of bid/ask · volume = tick count' : ` · ${md.optionsFeedLabel}${md.optionsBlockReason ? ` · ${md.optionsBlockReason}` : ''}`}
+          {system.venue === 'oanda' ? ' · mid of bid/ask · volume = tick count' : usesOptions ? ` · ${md.optionsFeedLabel}${md.optionsBlockReason ? ` · ${md.optionsBlockReason}` : ''}` : ' · IEX shows only part of the market volume, so VWAP and volume are IEX-only'}
         </div>
       </section>
       <section>
