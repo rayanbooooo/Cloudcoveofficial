@@ -7,17 +7,21 @@ suggests the strategy will make money.
 
 ## Choose the broker
 
-Scalp City trades through **one broker per server**. Pick by what you want to trade:
+Scalp City trades through **one broker per server**. The default is **Alpaca**, which this guide
+assumes (Part B). OANDA is an optional alternative for the real spot markets (Part A).
 
 | You want to trade | Broker | `BROKER=` | "Paper" means |
 |---|---|---|---|
-| Gold, Nasdaq 100, GBP/USD, EUR/JPY, US30 (FX, metals, index CFDs) | **OANDA** | `oanda` | an OANDA fxTrade **Practice** account |
-| US stocks and options (QQQ, SPY, IWM …) | **Alpaca** | `alpaca` | an Alpaca **Paper** account |
+| US stocks and ETFs: **GLD** (gold), **QQQ** (Nasdaq), **DIA** (US30), **FXB** (GBPUSD), **FXE** (euro), or options | **Alpaca** (default) | `alpaca` | an Alpaca **Paper** account |
+| The real gold, Nasdaq 100, GBP/USD, EUR/JPY and US30 markets (FX, metals, index CFDs) | OANDA (optional) | `oanda` | an OANDA fxTrade **Practice** account |
 
-Alpaca cannot trade FX, metals or index CFDs, which is why OANDA exists here. Orders, positions,
-risk limits and circuit breakers are kept per broker, so switching later never mixes the two books.
+Alpaca cannot trade spot gold, FX or index CFDs, so on Alpaca the bot trades **ETF stand-ins**:
+shares of funds that follow those markets. They are real market data and real orders, but they are
+not the same instruments: they only trade during US stock hours, move less per minute, and there is
+no ETF for EUR/JPY (FXE follows the euro against the dollar instead). Orders, positions, risk limits
+and circuit breakers are kept per broker, so switching later never mixes the two books.
 
-**Part A** is OANDA, **Part B** is Alpaca, and the safety routine at the end applies to both.
+**Part B** is Alpaca, **Part A** is OANDA, and the safety routine at the end applies to both.
 
 ---
 
@@ -151,62 +155,98 @@ Do this outside market hours.
 
 ---
 
-## Part B — Alpaca (US stocks and options)
+## Part B — Alpaca (ETF stand-ins, stocks and options)
 
 ### B0. What you need
 
-- **An Alpaca live account, funded.** It needs options approval that allows buying calls and puts
-  (if you trade options), plus API keys for both **Paper** and **Live** (each dashboard → API
-  Keys). Never paste keys into a chat, an email or git; they only go into Render's settings.
+- **An Alpaca live account, funded,** plus API keys for both **Paper** and **Live** (each
+  dashboard → API Keys). Never paste keys into a chat, an email or git; they only go into
+  Render's settings.
 - **The $25,000 rule.** Under $25k in a margin account, US rules allow 3 day trades per 5
-  business days. The bot enforces it, so it will sit out rather than break the rule. A cash
-  account avoids the rule but can only trade settled cash (options settle the next day).
-- **Market data:**
-  - **Shares:** the free IEX feed is enough.
-  - **Options, live:** autotrading needs real-time OPRA quotes (Alpaca's paid data plan). The app
-    blocks live options autotrading on the free feed on purpose: those prices aren't real quotes.
-    Either subscribe and set `ALPACA_OPTIONS_FEED=opra`, or switch the worker to shares (Workers
-    drawer → Instrument → EQUITY).
+  business days. A scalper makes day trades, so on a small margin account the bot will take at
+  most three round trips per five days and then sit out (it enforces the rule; it never breaks it).
+  A cash account avoids the rule but can only trade settled cash.
+- **Market data:** the free IEX feed is enough for shares. It carries only part of the volume, so
+  VWAP and volume readings are IEX-only; the app labels this everywhere.
 - **A Render account with a card.**
 
 ### B1. Deploy, in PAPER first
 
-1. **Create the Blueprint** as in A1, but set `BROKER=alpaca`.
+1. **Create the Blueprint** (`render.yaml`). It already says `BROKER=alpaca` and the ETF worker set.
 2. **Enter the paper keys:** `ALPACA_PAPER_API_KEY` and `ALPACA_PAPER_API_SECRET`. Leave the LIVE
    pair empty for now.
 3. **Wait for the first build,** then find `FIRST RUN … setup code: XXXXX-XXXXX` in the logs and
    **Create your account** with it. (The code changes on every restart until the account exists.)
 
+Right after a deploy the server answers with a "starting up" page for a minute or two while the
+previous copy finishes. The app says so and reconnects by itself; just wait.
+
 ### B2. Prove the connection on paper (required)
 
 - **Health drawer:** everything green: broker, trade stream, market data, clock, reconciliation.
 - **Complete one paper round trip.** During market hours, either let a worker trade
-  (Autotrading ON, then enable one worker) or do it by hand: Trade drawer → buy 1 SPY share →
+  (Autotrading ON, then enable one worker) or do it by hand: Trade drawer → buy 1 GLD share →
   sell it. Check it in Alpaca's **paper** dashboard. The LIVE checklist refuses to pass until a
   paper round trip exists.
 - **Strongly recommended:** run paper for a couple of weeks and read the Journal before risking money.
 
-### B3. Turn on LIVE, deliberately
+### B3. How the ETF workers trade, and what protects you
+
+The five workers: **GOLD (GLD)**, **NASDAQ (QQQ)**, **US30 (DIA)**, **GBPUSD (FXB)**, **EURO (FXE)**.
+
+- **One signal, mechanical rules.** Six checks (VWAP, EMA50, momentum, opening range, structure,
+  volume) must all agree before an entry. Nothing here has been shown to make money; paper trading
+  exists to find out.
+- **Every entry is sized from the stop.** The stop sits 1.5 ATR away (ATR = the market's own recent
+  range) and the number of shares is chosen so that being stopped out costs at most the
+  per-trade risk limit ($10 by default), then capped by the position size limit and the share
+  limit. Whole shares only. One QQQ share can cost several hundred dollars, so with a $1,000 position
+  limit expect 1–3 shares: tiny trades and tiny results.
+- **The stop is held by this server, not by Alpaca.** If the server is down (a deploy, a crash),
+  open positions have no stop until it is back. Keep positions small, avoid deploying with one
+  open, and use the broker's own app if you ever need to close something while the server is off.
+- **Exits:** stop (1.5 ATR), target (2 ATR), 45 minutes at most (90 for the currency ETFs), loss of
+  VWAP, and everything is flattened 15 minutes before the close. No entries in the last 10 minutes.
+- **Long only by default.** Turn shorting on per worker (Workers drawer → Allow shorts) only if your
+  account is a margin account with shorting enabled. Short losses are not capped by the share price.
+- **Currency ETFs are thin.** FXB and FXE trade little, especially on the free feed: their spreads can
+  be wider than a one-minute move and their quotes can be seconds old. The bot refuses to trade on
+  stale data or a spread that is too wide for the stop, so these two will often sit out. They use
+  5-minute bars. That is the safe behaviour, not a bug.
+- **Your stored limits win.** The `MAX_*` values only seed the risk limits the first time the database
+  is used; after that the **Risk drawer** is the source of truth. If an entry is blocked with
+  "one share costs $… over the $… position limit", raise the position size there (loosening a limit
+  asks for confirmation).
+
+### B4. Turn on LIVE, deliberately
 
 Do this outside market hours.
 
 1. **Configure Render.** Set `ALPACA_LIVE_API_KEY` and `ALPACA_LIVE_API_SECRET`,
-   `LIVE_TRADING_ENABLED=true`, `TRADING_ENVIRONMENT=live`, and `ALPACA_OPTIONS_FEED=opra` only if
-   you subscribed to real-time options data. Save, then **Manual Deploy**.
+   `LIVE_TRADING_ENABLED=true` and `TRADING_ENVIRONMENT=live`. Save, then **Manual Deploy**.
 2. **Check the setup.** The app now shows the red **LIVE** badge and frame and your live account.
-   Risk drawer: confirm the small starting limits (from `MAX_*`):
+   Risk drawer: confirm small limits that fit your account. The blueprint seeds these on a fresh
+   database; lower them for real money:
 
    | Limit | Starting value |
    |---|---|
    | Daily loss | $100 |
-   | Position size | $300 |
-   | Contracts per order | 1 |
-   | Open positions | 1 |
-   | Trades per day | 3 |
+   | Position size | $1,000 |
+   | Shares per order | 50 |
+   | Open positions | 2 |
+   | Trades per day | 6 |
 3. **Arm LIVE** (Live drawer: every readiness check green; password; masked account number; two
    confirmations), **start one worker**, then **Autotrading ON**. Watch the first trade end to end
    and compare it with Alpaca's live dashboard.
 4. **Scale slowly,** after weeks of real results.
+
+### B5. The original options workers
+
+`ALPACA_WORKER_SET=options` runs the original QQQ, SPY and IWM options workers instead (buying calls
+and puts). Live options autotrading needs real-time OPRA quotes (Alpaca's paid data plan): set
+`ALPACA_OPTIONS_FEED=opra` once subscribed. The app blocks live options autotrading on the free
+feed on purpose, because those prices are not real quotes. Switching sets is a redeploy; the other
+set's workers and history stay in the database untouched.
 
 ---
 
@@ -230,6 +270,9 @@ Do this outside market hours.
 
 | Symptom | What it means / what to do |
 |---|---|
+| The app says "The server is starting up" | Normal for a minute or two after a deploy: the previous copy is finishing. It reconnects by itself. If it lasts more than a few minutes, check Render → Logs, and that only one `scalp-city` service exists. |
+| An entry is blocked: "one share costs … over the … position limit" | The position size limit is lower than one share of that ETF. Raise it in the Risk drawer (it asks for confirmation). |
+| A worker shows a stale-data or "spread too wide" block | The bot will not trade on data older than 5 seconds or a spread too wide for its stop. Normal for FXB and FXE on the free feed. |
 | Phase `NOT_CONFIGURED` | Token/keys missing or mistyped for the current environment (Render → Environment). |
 | OANDA: `not offered to this account` | Your OANDA account cannot trade that instrument; the worker won't trade it and the other markets are unaffected. The doctor lists exactly which markets your account is offered. |
 | OANDA: nothing connects | Run `node packages/server/dist/oanda-doctor.js` in the Render Shell: it names the failing step (token, account id, practice vs live, instruments, prices, streams, clock). |

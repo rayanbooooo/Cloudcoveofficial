@@ -3,10 +3,14 @@
 A self-hosted, single-user trading command center. Autonomous scalping workers build a "charge" from six
 technical conditions and, only if every risk check passes, trade through one broker per server:
 
-- **OANDA** (`BROKER=oanda`): **gold, Nasdaq 100, GBP/USD, EUR/JPY and US30** (FX, metals and index CFDs),
-  long and short, with a stop held at the broker on every entry. Paper = an OANDA fxTrade *Practice* account.
-- **Alpaca** (`BROKER=alpaca`): QQQ, SPY and IWM options (or shares). Alpaca cannot trade FX, metals or
-  index CFDs.
+- **Alpaca** (`BROKER=alpaca`, the default): shares of **ETF stand-ins**: **GLD** (gold), **QQQ** (Nasdaq),
+  **DIA** (US30), **FXB** (GBPUSD) and **FXE** (euro), long by default, each entry sized so a stop-out costs
+  at most the per-trade risk limit. Alpaca cannot trade spot gold, FX or index CFDs, and no ETF tracks
+  EUR/JPY, so these are stand-ins: US stock hours only, and they move less per minute. The stop is held by
+  this server, not by Alpaca. The original QQQ/SPY/IWM options workers remain (`ALPACA_WORKER_SET=options`).
+- **OANDA** (`BROKER=oanda`, optional): the real **gold, Nasdaq 100, GBP/USD, EUR/JPY and US30** markets
+  (FX, metals and index CFDs), long and short, with a stop held at the broker on every entry. Paper = an
+  OANDA fxTrade *Practice* account.
 
 A 3D city visualizes what the workers are doing, and clicking a tower puts you at that worker's desk. Every
 number on screen comes from the broker or the market data feed.
@@ -250,7 +254,7 @@ live in the panels anyway.
 ## Tests
 
 ```bash
-npm test         # 220 tests (31 shared + 189 server), ~40 s, no network, no database server needed
+npm test         # 224 tests (31 shared + 193 server), ~45 s, no network, no database server needed
 TEST_DATABASE_URL=postgres://… npm test   # also runs the 2 single-instance-lock tests against a real PostgreSQL
 npm run typecheck
 ```
@@ -270,6 +274,7 @@ npm run typecheck
 | `oanda`, `oandaStream`, `oandaDayPnl` | The OANDA adapter against `FakeOanda`: order mapping, precision and price bounds, ambiguous-submit resolution, transaction-stream replay after a drop, clock skew, day P&L from transactions. |
 | `oandaOffered` | A configured market the account is not offered never takes the others down: the app still reaches READY, prices and sizes the offered markets, and reports the missing ones; the adapter falls back market by market when OANDA refuses a request. |
 | `cfd` | CFD risk and sizing: risk-per-trade units, notional and margin caps, stop-side checks, long and short, fail-closed cases. |
+| `e2e.etf` | The ETF share workers end to end against the Alpaca fake: entry with a server-held ATR stop sized from the risk limit, target exit, stop-out at about the risk limit, and the clear message when one share is over the position limit. |
 | `e2e.oanda` | The full OANDA flow end to end: sizing, FOK entry with a broker-held stop, fills from the transaction stream, exits, ledger, reconciliation. |
 
 The `e2e.paper` flow:
