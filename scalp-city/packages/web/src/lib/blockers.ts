@@ -1,0 +1,79 @@
+import type { SymbolQuoteView, SystemView, WorkerView } from '@scalp-city/shared';
+import { age, countdown, hmET } from './format';
+
+/**
+ * Why a worker is not placing an order right now, in plain words, from the state the server already
+ * publishes. The signal can say READY while an order is still impossible (switches off, market closed,
+ * stale data, a tripped breaker): this is the list a person needs to see next to it.
+ */
+
+/** What the person can do about a blocker from where they are looking. */
+export type BlockerAction = 'autotrading' | 'worker' | 'resume' | 'release';
+
+export interface Blocker {
+  code: string;
+  text: string;
+  detail?: string;
+  action?: BlockerAction;
+}
+
+export function timeframeMs(tf: string): number {
+  const m = /^(\d+)(Min|Hour|Day)$/.exec(tf);
+  if (!m) return 60_000;
+  return Number(m[1]) * (m[2] === 'Min' ? 60_000 : m[2] === 'Hour' ? 3_600_000 : 86_400_000);
+}
+
+/**
+ * The confirmed signal describes the last closed bar. When the market is closed, or no bar has closed for a
+ * few bars, that is old news (a READY from yesterday's last bar is still READY on screen the next morning).
+ */
+export function signalIsStale(w: WorkerView, system: SystemView, now: number): boolean {
+  if (!system.market.isOpen) return true;
+  const t = w.signal.barTime;
+  return t !== null && now - t > 3 * timeframeMs(w.config.timeframe) + 5_000;
+}
+
+const MARKET_WORDS: Record<string, string> = { PRE_MARKET: 'pre-market', AFTER_HOURS: 'after hours', HOLIDAY: 'holiday', CLOSED: 'closed', UNKNOWN: 'status unknown' };
+
+function marketBlocker(system: SystemView, now: number): Blocker {
+  const m = system.market;
+  const opens = m.nextOpen !== null ? `Opens in ${countdown(m.nextOpen - now)} (${hmET(m.nextOpen)} ET).` : undefined;
+  if (system.venue === 'oanda') return { code: 'MARKET_CLOSED', text: 'Outside the trading window', detail: opens };
+  return {
+    code: 'MARKET_CLOSED',
+    text: `Market closed (${MARKET_WORDS[m.label] ?? 'closed'})`,
+    detail: `${opens ? `${opens} ` : ''}Workers trade the regular session only.`,
+  };
+}
+
+/** Codes the first rules below cover themselves; the system's own list repeats them. */
+const HANDLED = new Set(['KILL_SWITCH', 'AUTOTRADING_OFF', 'ENTRIES_PAUSED', 'MARKET_CLOSED']);
+
+export function entryBlockers(w: WorkerView, system: SystemView, quote: SymbolQuoteView | null | undefined, now: number): Blocker[] {
+  // Holding a position or waiting on an order: it is not looking for an entry, so there is nothing to explain.
+  if (w.position || w.activeOrderId) return [];
+  const out: Blocker[] = [];
+  const c = system.controls;
+  if (c.killSwitch.active) out.push({ code: 'KILL_SWITCH', text: 'Kill switch is engaged', detail: 'All workers are stopped until it is released.', action: 'release' });
+  if (!c.autotrading) out.push({ code: 'AUTOTRADING_OFF', text: 'Autotrading is off', detail: 'The switch in the top bar. It is off after every restart.', action: 'autotrading' });
+  if (!w.autotradeEnabled) out.push({ code: 'WORKER_OFF', text: 'This worker is switched off', detail: 'Each worker has its own switch, off after every restart.', action: 'worker' });
+  if (c.entriesPaused) out.push({ code: 'ENTRIES_PAUSED', text: 'Entries are paused', detail: 'PAUSE ENTRIES in the top bar: exits keep running.', action: 'resume' });
+  if (!system.market.isOpen) out.push(marketBlocker(system, now));
+  for (const r of system.trading.haltReasons) if (!HANDLED.has(r.code)) out.push({ code: r.code, text: r.message });
+  if (w.market && w.market.listed === false) out.push({ code: 'NOT_OFFERED', text: 'Not offered to this account by the broker' });
+  if (w.haltReason && !out.some((b) => b.text === w.haltReason)) out.push({ code: 'WORKER_HALT', text: w.haltReason });
+  // Data that went quiet while the market is open (when it is closed, that is the explanation already).
+  if (system.market.isOpen && quote?.stale && !out.some((b) => b.code === 'DATA_STALE')) {
+    out.push({ code: 'DATA_STALE', text: `No fresh ${w.config.symbol} price`, detail: quote.ageMs !== null ? `Last update ${age(quote.ageMs)} ago.` : undefined });
+  }
+  if (out.length === 0) {
+    // Nothing is switched off or closed: the last risk check, if it is recent, is the reason.
+    const r = w.signal.lastRisk;
+    if (r && !r.approved && r.blockedBy && now - r.evaluatedAt < 3 * timeframeMs(w.config.timeframe) + 5_000) {
+      out.push({ code: `RISK_${r.blockedBy.id}`, text: `Risk check: ${r.blockedBy.label}`, detail: r.blockedBy.detail });
+    } else if (w.signal.consumed && w.signal.phase === 'READY') {
+      out.push({ code: 'SIGNAL_USED', text: 'This setup already produced an order', detail: 'The worker waits for the next setup.' });
+    }
+  }
+  return out;
+}

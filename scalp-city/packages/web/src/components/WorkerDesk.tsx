@@ -6,6 +6,7 @@ import { useIsMobile } from '../lib/useIsMobile';
 import { dateTimeET, humanize, money, pct, pnlClass, price, px, qtyStr, timeET } from '../lib/format';
 import { useStore } from '../store/store';
 import { Scanner } from './panels/Scanner';
+import { WhyNotPlacing } from './WhyNot';
 import { directionColor, TOWER_COLORS } from './panels/Workers';
 import { PriceChart, type ChartLevel, type ChartMarker } from './PriceChart';
 import { cx, Drawer, ErrorText, Money, Row, Toggle } from './ui';
@@ -203,6 +204,7 @@ export function WorkerDesk() {
           </div>
         </div>
         <ErrorText>{error}</ErrorText>
+        <WhyNotPlacing w={w} headline={w.signal.phase === 'READY'} />
         {w.unmanagedWarning && <div className="border-l-2 border-pending bg-pending/5 px-2 py-1.5 text-[12px] text-pending">{w.unmanagedWarning}</div>}
 
         <Suspense fallback={<div className="label flex items-center justify-center border border-line" style={{ height: mobile ? 250 : 340 }}>Loading desk…</div>}>

@@ -1,7 +1,9 @@
 import { directionLabel, type ConditionResult, type WorkerView } from '@scalp-city/shared';
-import { countdown, humanize, money, px, qtyStr, unitsStr } from '../../lib/format';
+import { signalIsStale, timeframeMs } from '../../lib/blockers';
+import { countdown, dateTimeET, humanize, money, px, qtyStr, unitsStr } from '../../lib/format';
 import { serverNow, useStore } from '../../store/store';
 import { ChargeBar, Check, cx, Panel } from '../ui';
+import { WhyNotPlacing } from '../WhyNot';
 
 const RISK_LABELS: Record<string, string> = {
   data_fresh: 'Data',
@@ -71,6 +73,7 @@ export function Scanner({ workerId, embedded }: { workerId?: string | null; embe
   const workers = useStore((s) => s.workers);
   const selected = useStore((s) => s.ui.selectedWorker);
   const orders = useStore((s) => s.orders);
+  const system = useStore((s) => s.system);
   const w = workerId ? (workers[workerId] ?? null) : pickScannerWorker(workers, selected);
   if (!w) return null;
   const sig = w.signal;
@@ -85,6 +88,10 @@ export function Scanner({ workerId, embedded }: { workerId?: string | null; embe
   const risk = sig.lastRisk;
   const now = serverNow();
   const confirming = !!preview && preview.direction !== 'NEUTRAL' && preview.charge >= w.config.params.readyThreshold && sig.phase !== 'READY';
+  // A signal from the last bar before the market closed is still on screen the next morning: say so.
+  const stale = !!system && signalIsStale(w, system, now);
+  const tfMs = timeframeMs(w.config.timeframe);
+  const looksReady = sig.phase === 'READY' || confirming || sig.charge >= w.config.params.readyThreshold;
 
   const body = (
     <div className="flex flex-col gap-2">
@@ -95,42 +102,50 @@ export function Scanner({ workerId, embedded }: { workerId?: string | null; embe
           </span>
           <span className="label">{w.market?.displayName ?? w.config.symbol} · {w.config.timeframe.replace('Min', 'm')}</span>
         </div>
-        <span className="label-strong text-[11px]" style={{ color: sig.phase === 'READY' ? 'var(--color-call)' : 'var(--color-fg-2)' }}>
-          {sig.phase === 'READY' ? 'READY' : humanize(sig.phase)}
+        <span className="label-strong text-[11px]" style={{ color: sig.phase === 'READY' && !stale ? 'var(--color-call)' : 'var(--color-fg-2)' }}>
+          {sig.phase === 'READY' ? (stale ? 'READY · LAST BAR' : 'READY') : humanize(sig.phase)}
         </span>
       </div>
-      <ConditionList conditions={sig.conditions} />
-      <div>
-        <ChargeBar value={sig.charge} color={color} ghost={preview && preview.direction === dir ? preview.charge : undefined} />
-        <div className="mt-1 flex items-baseline justify-between">
-          <span className="num text-[13px] text-fg">
-            {sig.charge}% <span className="label">confirmed</span>
-          </span>
-          <span className="label">
-            {confirming
-              ? `confirming · bar closes ${countdown((sig.nextEvaluationAt ?? now) - now)}`
-              : sig.nextEvaluationAt
-                ? `next bar ${countdown(sig.nextEvaluationAt - now)}`
-                : 'market closed'}
-          </span>
+      {stale && sig.barTime !== null && (
+        <div className="label -mt-1 !text-[9.5px]">
+          As of {dateTimeET(sig.barTime + tfMs)} ET{system && !system.market.isOpen ? ' · the market is closed, so no new bars yet' : ' · no new bar for a while'}
         </div>
-        {preview && (
-          <div className="label mt-0.5 flex justify-between !text-[9.5px]">
-            <span>
-              forming bar preview:{' '}
-              <span className="num" style={{ color: previewColor }}>
-                {preview.direction === 'NEUTRAL' ? 'no setup' : `${dirText(preview.direction)} ${preview.charge}%`}
-              </span>
+      )}
+      {!embedded && looksReady && <WhyNotPlacing w={w} headline />}
+      <div className={cx('flex flex-col gap-2', stale && 'opacity-60')}>
+        <ConditionList conditions={sig.conditions} />
+        <div>
+          <ChargeBar value={sig.charge} color={color} ghost={preview && preview.direction === dir ? preview.charge : undefined} />
+          <div className="mt-1 flex items-baseline justify-between">
+            <span className="num text-[13px] text-fg">
+              {sig.charge}% <span className="label">confirmed</span>
             </span>
-            <span>{sig.consumed ? 'signal used' : 'preview never trades'}</span>
+            <span className="label">
+              {confirming
+                ? `confirming · bar closes ${countdown((sig.nextEvaluationAt ?? now) - now)}`
+                : sig.nextEvaluationAt
+                  ? `next bar ${countdown(sig.nextEvaluationAt - now)}`
+                  : 'market closed'}
+            </span>
           </div>
-        )}
+          {preview && (
+            <div className="label mt-0.5 flex justify-between !text-[9.5px]">
+              <span>
+                forming bar preview:{' '}
+                <span className="num" style={{ color: previewColor }}>
+                  {preview.direction === 'NEUTRAL' ? 'no setup' : `${dirText(preview.direction)} ${preview.charge}%`}
+                </span>
+              </span>
+              <span>{sig.consumed ? 'signal used' : 'preview never trades'}</span>
+            </div>
+          )}
+        </div>
       </div>
       {w.market && <SizingLine w={w} />}
       {risk && (
-        <div className="border-t border-line pt-1.5">
+        <div className={cx('border-t border-line pt-1.5', stale && 'opacity-60')}>
           <div className="label mb-1 flex justify-between">
-            <span>Risk check</span>
+            <span>{stale ? 'Risk check · last attempt' : 'Risk check'}</span>
             <span className={risk.approved ? '!text-call' : '!text-put'}>{risk.approved ? 'APPROVED' : 'BLOCKED'}</span>
           </div>
           <div className="grid grid-cols-2 gap-x-3">
