@@ -7,25 +7,30 @@ suggests the strategy will make money.
 
 ## Choose the broker
 
-Scalp City trades through **one broker per server**. This installation is set up for **OANDA**
-(Part A): the real gold, Nasdaq, GBP/USD, EUR/JPY and US30 markets, nearly around the clock on
-weekdays. Alpaca (Part B) is the alternative: ETF stand-ins for those markets, US stock hours only.
+Scalp City trades through **one broker per server**. The default is **Alpaca** (Part B): shares of ETF
+stand-ins for gold, the Nasdaq, the Dow, GBP/USD and the euro, US stock hours only. **OANDA** (Part A)
+trades the real markets nearly around the clock, but read the warning below first.
 
 | You want to trade | Broker | `BROKER=` | "Paper" means |
 |---|---|---|---|
-| Gold, Nasdaq 100, GBP/USD, EUR/JPY, US30 (FX, metals, index CFDs), nearly 24 hours on weekdays | **OANDA** (the default in `render.yaml`) | `oanda` | an OANDA fxTrade **Practice** account |
-| Shares of **GLD** (gold), **QQQ** (Nasdaq), **DIA** (US30), **FXB** (GBPUSD), **FXE** (euro), or options; US market hours only | Alpaca | `alpaca` | an Alpaca **Paper** account |
+| Shares of **GLD** (gold), **QQQ** (Nasdaq), **DIA** (US30), **FXB** (GBPUSD), **FXE** (euro), or options; US market hours only | **Alpaca** (the default in `render.yaml`) | `alpaca` | an Alpaca **Paper** account |
+| Gold, Nasdaq 100, GBP/USD, EUR/JPY, US30 (FX, metals, index CFDs), nearly 24 hours on weekdays | OANDA (only where OANDA offers its API) | `oanda` | an OANDA fxTrade **Practice** account |
+
+> **OANDA is not an option for clients in the EU.** OANDA's help pages say its API is not available to OANDA TMS
+> clients (the entity EU accounts are moved to), and OANDA has restricted API trading for European clients since
+> 2017 (MiFID II). A European OANDA account cannot generate the API token this bot needs. Confirm in your account
+> ("Manage API Access" must exist) or with OANDA support before you open or fund an account for this.
 
 Alpaca cannot trade spot gold, FX or index CFDs, so on Alpaca the bot trades ETF stand-ins: shares of
 funds that follow those markets. They are real market data and real orders, but not the same
 instruments, they only trade while the US market is open, and there is no ETF for EUR/JPY. Orders,
 positions, risk limits and circuit breakers are kept per broker, so switching never mixes the two books.
 
-**Part A** is OANDA, **Part B** is Alpaca, and the safety routine at the end applies to both.
+**Part B** is Alpaca, **Part A** is OANDA, and the safety routine at the end applies to both.
 
 ---
 
-## Part A — OANDA (gold, Nasdaq, FX, US30)
+## Part A — OANDA (gold, Nasdaq, FX, US30; not available to EU clients)
 
 ### A0. What you need
 
