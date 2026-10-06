@@ -142,6 +142,26 @@ describe('setup lifecycle', () => {
     expect(put.setupId).toBe(`qqq-og:PUT:${T0 + 60_000}`);
   });
 
+  it('a re-arming strategy gives every READY bar its own setup id, a patient one keeps a single id', () => {
+    const fast: StrategyParams = { ...P, rearmEachBar: true };
+    const stepFast = (prev: SignalState, s: IndicatorSnapshot) => advanceSignal(prev, evaluateSignal(s, fast), fast, 'qqq-og');
+    const first = stepFast(INITIAL_SIGNAL_STATE, snap({}));
+    const second = stepFast(first, snap({ barTime: T0 + 60_000 }));
+    const third = stepFast(second, snap({ barTime: T0 + 120_000 }));
+    expect([first.phase, second.phase, third.phase]).toEqual(['READY', 'READY', 'READY']);
+    expect(new Set([first.setupId, second.setupId, third.setupId]).size).toBe(3);
+    expect(second.setupId).toBe(`qqq-og:CALL:${T0 + 60_000}`);
+    expect(third.formingSince).toBe(T0); // it is still the same run of momentum
+    // The default keeps one id for the whole run, which is why it trades rarely.
+    const p1 = step(INITIAL_SIGNAL_STATE, snap({}));
+    const p3 = step(step(p1, snap({ barTime: T0 + 60_000 })), snap({ barTime: T0 + 120_000 }));
+    expect(p3.setupId).toBe(p1.setupId);
+    // Not READY: no re-arming, the id is kept until the setup fades.
+    const charging = stepFast(INITIAL_SIGNAL_STATE, snap({ orHigh: 610, structure: 'RANGE' }));
+    const stillCharging = stepFast(charging, snap({ barTime: T0 + 60_000, orHigh: 610, structure: 'RANGE' }));
+    expect(stillCharging.setupId).toBe(charging.setupId);
+  });
+
   it('is deterministic — replaying the same bars yields the same setup id', () => {
     const a = step(step(INITIAL_SIGNAL_STATE, snap({ orHigh: 610 })), snap({ barTime: T0 + 60_000 }));
     const b = step(step(INITIAL_SIGNAL_STATE, snap({ orHigh: 610 })), snap({ barTime: T0 + 60_000 }));

@@ -270,12 +270,35 @@ export function Modals() {
               {w?.config.name} will be allowed to submit orders autonomously (
               {w?.config.instrument === 'CFD'
                 ? `${instrumentName(w.config.symbol)} · long and short, up to ${w.config.limits.maxTradesPerDay} trades/day, risking at most ${money(w.config.limits.riskPerTrade)} per trade, a stop held by the broker on every entry`
-                : `${w?.config.instrument}, up to ${w?.config.limits.maxTradesPerDay} trades/day, ${w?.config.limits.maxContracts} contracts`}
+                : w?.config.instrument === 'EQUITY'
+                  ? `shares of ${w.config.symbol} · ${w.config.allowShort ? 'long and short' : 'long only'}, up to ${w.config.limits.maxTradesPerDay} trades/day, risking at most ${money(w.config.limits.riskPerTrade)} per trade, a stop held by this server (not the broker)`
+                  : `${w?.config.instrument}, up to ${w?.config.limits.maxTradesPerDay} trades/day, ${w?.config.limits.maxContracts} contracts`}
               , daily loss −{money(w?.config.limits.dailyLossLimit ?? null)}). Every order still passes the risk engine. Global autotrading must also be ON.
             </>
           }
           action={() => Api.setWorkerEnabled(modal.workerId, true, true)}
           confirmLabel="Enable worker"
+          onClose={close}
+        />
+      );
+    }
+    case 'enable-all-workers': {
+      const off = Object.values(workers).filter((x) => !x.autotradeEnabled);
+      return (
+        <SimpleConfirm
+          title="TURN ALL WORKERS ON"
+          body={
+            <>
+              {off.length} worker{off.length === 1 ? '' : 's'} ({off.map((x) => x.config.name).join(', ') || 'none'}) will be allowed to submit orders autonomously, each within its own limits. Every order still passes the risk engine, and
+              global autotrading must also be ON.
+            </>
+          }
+          action={async () => {
+            const results = await Promise.allSettled(off.map((x) => Api.setWorkerEnabled(x.config.id, true, true)));
+            const failed = results.flatMap((r, i) => (r.status === 'rejected' ? [`${off[i]!.config.name}: ${r.reason instanceof Error ? r.reason.message : String(r.reason)}`] : []));
+            if (failed.length) throw new Error(`Could not turn on ${failed.join('; ')}`);
+          }}
+          confirmLabel="Turn all on"
           onClose={close}
         />
       );

@@ -25,6 +25,7 @@ export type ModalState =
   | { kind: 'flatten' }
   | { kind: 'release-kill' }
   | { kind: 'enable-worker'; workerId: string }
+  | { kind: 'enable-all-workers' }
   | { kind: 'enable-autotrading' }
   | { kind: 'trade-review'; tradeId: string }
   | { kind: 'accept-reconciliation' }

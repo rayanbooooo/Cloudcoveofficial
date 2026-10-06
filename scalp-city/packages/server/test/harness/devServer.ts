@@ -11,7 +11,7 @@
  * Prices are synthetic. Nothing it shows says anything about real markets.
  *
  *   npm run demo                     # Alpaca-style demo (QQQ/SPY/IWM) on http://127.0.0.1:8787
- *   DEMO_SET=options npm run demo    # Alpaca demo with the classic QQQ/SPY/IWM options workers (default: ETF shares)
+ *   DEMO_SET=etf|options npm run demo # Alpaca demo with the patient ETF workers, or the classic QQQ/SPY/IWM options workers (default: fast scalpers)
  *   DEMO_BROKER=oanda npm run demo   # OANDA-style demo: gold, NAS100, GBPUSD, EURJPY, US30
  *   DEMO_OANDA_OFFERED=XAU_USD,GBP_USD,EUR_JPY DEMO_BROKER=oanda npm run demo   # an account that is not offered the others
  *   DEMO_AUTOTRADE=1 npm run demo    # also switch autotrading on (fake account)
@@ -45,9 +45,10 @@ const SETUP = ['1', 'true', 'yes'].includes((process.env.DEMO_SETUP ?? '').toLow
 const AUTOTRADE = ['1', 'true', 'yes'].includes((process.env.DEMO_AUTOTRADE ?? '').toLowerCase());
 const START = process.env.DEMO_START ?? '11:00:30';
 const BROKER = (process.env.DEMO_BROKER ?? 'alpaca').toLowerCase();
-/** Alpaca demo: the ETF share workers (default) or the classic QQQ/SPY/IWM options workers. */
-const SET = (process.env.DEMO_SET ?? 'etf').toLowerCase();
-if (SET !== 'etf' && SET !== 'options') throw new Error(`DEMO_SET must be etf or options, got "${SET}"`);
+/** Alpaca demo: the fast 1-minute scalpers (default), the patient ETF workers, or the classic QQQ/SPY/IWM options workers. */
+const SET = (process.env.DEMO_SET ?? 'scalp').toLowerCase();
+if (SET !== 'scalp' && SET !== 'etf' && SET !== 'options') throw new Error(`DEMO_SET must be scalp, etf or options, got "${SET}"`);
+const ETF_MARKETS = SET !== 'options';
 if (BROKER !== 'alpaca' && BROKER !== 'oanda') throw new Error(`DEMO_BROKER must be alpaca or oanda, got "${BROKER}"`);
 
 /** Real-time clock shifted into the fake session, so time flows at 1× from START. */
@@ -76,7 +77,7 @@ const ETF_START: Record<string, number> = { GLD: 300, QQQ: 600, DIA: 440, FXB: 1
 
 /** Morning history per symbol (minute i since the open): QQQ sells off, SPY rallies, IWM chops. ETF set: GLD sells off, DIA trends down, QQQ rallies, FXB/FXE chop. */
 function historyPath(symbol: string, i: number, base: number): number {
-  if (SET === 'etf') {
+  if (ETF_MARKETS) {
     switch (symbol) {
       case 'GLD':
         return i < 15 ? base + 0.15 * Math.sin(i) : i < 60 ? base - ((i - 15) * 1.5) / 45 : base - 1.5 + 0.02 * Math.sin(i);
@@ -100,7 +101,7 @@ function historyPath(symbol: string, i: number, base: number): number {
 
 /** Opening act for the live session: QQQ reverses up, SPY rolls over. Then a seeded regime walk. */
 function driftPerMinute(symbol: string, minute: number, regime: number): number {
-  if (SET === 'etf') {
+  if (ETF_MARKETS) {
     if (minute < 6) return symbol === 'GLD' ? 0.45 : symbol === 'DIA' ? -0.3 : 0;
     return regime * (symbol === 'FXB' || symbol === 'FXE' ? 0.01 : 0.12);
   }
@@ -168,7 +169,7 @@ async function main(): Promise<void> {
     clock,
     keyId: 'PKDEMOHARNESS',
     secretKey: 'demo-harness-secret',
-    symbols: SET === 'etf' ? ETF_START : { QQQ: 600, SPY: 570, IWM: 220 },
+    symbols: ETF_MARKETS ? ETF_START : { QQQ: 600, SPY: 570, IWM: 220 },
     sessionDate: SESSION_DATE,
     historyPath,
     historyVolume: (_s, i) => 8_000 + Math.round(4_000 * Math.abs(Math.sin(i / 3))),
@@ -189,6 +190,11 @@ async function main(): Promise<void> {
     DATABASE_URL: 'pglite://memory', // the harness passes its own in-memory database below
     MAX_POSITION_SIZE: '5000',
     MAX_ORDER_NOTIONAL: '5000',
+    // Loose enough for the fast scalpers to show how often they trade (a fresh real install is much slower).
+    MAX_TRADES_PER_DAY: '300',
+    MAX_CONCURRENT_POSITIONS: '5',
+    MAX_ORDERS_PER_MINUTE: '40',
+    MAX_DAILY_LOSS: '1000',
     HOST,
     PORT: String(PORT),
     ALLOWED_ORIGINS: process.env.ALLOWED_ORIGINS,
@@ -211,7 +217,7 @@ async function main(): Promise<void> {
   // Synthetic tape: ~2.5 prints per second per symbol, official bars on the minute.
   const rnd = mulberry32(20261005);
   const regimes = new Map<string, number>(
-    SET === 'etf'
+    ETF_MARKETS
       ? [
           ['GLD', 1],
           ['QQQ', 1],

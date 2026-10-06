@@ -61,10 +61,11 @@ services:
         fromDatabase:
           name: scalp-city-db
           property: connectionString
-      # Which Alpaca workers run: etf = shares of GLD (gold), QQQ (Nasdaq), DIA (US30), FXB (GBPUSD)
-      # and FXE (euro); options = the original QQQ/SPY/IWM options workers.
+      # Which Alpaca workers run: scalp = fast 1-minute scalpers on GLD (gold), QQQ (Nasdaq), DIA (US30), FXB
+      # (GBPUSD) and FXE (euro), long and short, many trades an hour; etf = the same markets with a patient
+      # strategy that trades rarely; options = the original QQQ/SPY/IWM options workers.
       - key: ALPACA_WORKER_SET
-        value: etf
+        value: scalp
       # Deliberately small starting limits. They seed the risk settings on FIRST boot only; after
       # that the app's Risk drawer is the source of truth (an existing deployment keeps what it
       # stored, so raise "position size" there if share entries report that one share is over the limit).

@@ -1,7 +1,8 @@
 import type { TowerState, WorkerView } from '@scalp-city/shared';
+import { Api } from '../../lib/api';
 import { money, pnlClass } from '../../lib/format';
 import { useStore } from '../../store/store';
-import { cx, Panel } from '../ui';
+import { Btn, cx, Panel } from '../ui';
 
 export const TOWER_COLORS: Record<TowerState, string> = {
   WATCHING: '#4c8dff',
@@ -108,11 +109,32 @@ export function Leaderboard() {
 
 export function WorkersPanel() {
   const workers = useWorkers();
+  const openModal = useStore((s) => s.openModal);
+  const allOn = workers.length > 0 && workers.every((w) => w.autotradeEnabled);
+  const anyOn = workers.some((w) => w.autotradeEnabled);
   // Any unknown worker P&L makes the total unknown (money(null) renders UNAVAILABLE).
   const total = workers.some((w) => w.stats.pnlToday === null) ? null : workers.reduce((s, w) => s + (w.stats.pnlToday ?? 0), 0);
   return (
     <Panel title="Workers" meta={<span className={cx('num', pnlClass(total))}>{money(total, { sign: true })}</span>}>
       <Heatmap />
+      <div className="mt-2 flex items-center justify-between gap-2">
+        <span className="label">
+          {workers.filter((w) => w.autotradeEnabled).length}/{workers.length} on
+        </span>
+        <span className="flex gap-1.5">
+          <Btn variant="outline" className="!h-6 !px-2 !text-[10px]" disabled={allOn} onClick={() => openModal({ kind: 'enable-all-workers' })}>
+            All on
+          </Btn>
+          <Btn
+            variant="ghost"
+            className="!h-6 !px-2 !text-[10px]"
+            disabled={!anyOn}
+            onClick={() => void Promise.allSettled(workers.filter((w) => w.autotradeEnabled).map((w) => Api.setWorkerEnabled(w.config.id, false)))}
+          >
+            All off
+          </Btn>
+        </span>
+      </div>
       <div className="mt-2.5">
         <Leaderboard />
       </div>

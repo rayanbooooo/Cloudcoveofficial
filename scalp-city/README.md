@@ -3,9 +3,9 @@
 A self-hosted, single-user trading command center. Autonomous scalping workers build a "charge" from six
 technical conditions and, only if every risk check passes, trade through one broker per server:
 
-- **Alpaca** (`BROKER=alpaca`, the default in `render.yaml`): shares of **ETF stand-ins**: **GLD** (gold),
-  **QQQ** (Nasdaq), **DIA** (US30), **FXB** (GBPUSD) and **FXE** (euro), long by default, each entry sized so a
-  stop-out costs at most the per-trade risk limit. Alpaca cannot trade spot gold, FX or index CFDs, and no ETF
+- **Alpaca** (`BROKER=alpaca`, the default in `render.yaml`): fast **1-minute scalpers** (long and short, every ready bar can enter) on shares of **ETF stand-ins**: **GLD** (gold),
+  **QQQ** (Nasdaq), **DIA** (US30), **FXB** (GBPUSD) and **FXE** (euro), each entry sized so a
+  stop-out costs at most the per-trade risk limit (`ALPACA_WORKER_SET=etf` is the patient, long-only version). Alpaca cannot trade spot gold, FX or index CFDs, and no ETF
   tracks EUR/JPY, so these are stand-ins: US stock hours only. The stop is held by this server, not by Alpaca.
   The original QQQ/SPY/IWM options workers remain (`ALPACA_WORKER_SET=options`).
 - **OANDA** (`BROKER=oanda`): the real **gold, Nasdaq 100, GBP/USD, EUR/JPY and US30** markets (FX, metals and

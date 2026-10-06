@@ -1,4 +1,5 @@
 import { DEFAULT_STRATEGY_PARAMS, type StrategyParams, type Venue, type WorkerConfigView } from '@scalp-city/shared';
+import type { AlpacaWorkerSet } from '../config/env.js';
 
 export interface StrategyDefinition {
   id: string;
@@ -27,6 +28,29 @@ export const STRATEGIES: StrategyDefinition[] = [
       momentumThreshold: 0.6,
       weights: { VWAP: 20, EMA50: 15, MOMENTUM: 30, OPENING_RANGE: 10, STRUCTURE: 10, VOLUME: 15 },
       required: ['VWAP', 'MOMENTUM'],
+    },
+  },
+  {
+    id: 'rapid-scalper',
+    name: 'Rapid Scalper',
+    // Fast 1-minute momentum scalper, long or short: price on the right side of VWAP and a fast EMA with a
+    // real move behind it, and every READY bar is its own entry (so it trades many times an hour, not once
+    // per setup). Spread is the enemy at this speed: expect many small trades, not many large ones.
+    params: {
+      ...DEFAULT_STRATEGY_PARAMS,
+      vwapMode: 'side',
+      emaPeriod: 20,
+      emaSlopeLookback: 2,
+      momentumLookback: 3,
+      momentumThreshold: 0.35,
+      structureLookback: 4,
+      rvolThreshold: 0.8,
+      weights: { VWAP: 25, EMA50: 25, MOMENTUM: 30, OPENING_RANGE: 0, STRUCTURE: 10, VOLUME: 10 },
+      required: ['VWAP', 'MOMENTUM'],
+      formingThreshold: 25,
+      chargingThreshold: 55,
+      readyThreshold: 80,
+      rearmEachBar: true,
     },
   },
   {
@@ -65,9 +89,6 @@ const baseOptions = {
   minOpenInterest: 100,
   minBidSize: 1,
 };
-
-/** Alpaca worker sets: ETF stand-ins for the markets people ask for (default), or the original options workers. */
-export type AlpacaWorkerSet = 'etf' | 'options';
 
 const OPTIONS_WORKERS: WorkerSeed[] = [
   {
@@ -192,11 +213,50 @@ function etfWorkers(): WorkerSeed[] {
 
 const ETF_WORKERS = etfWorkers();
 
-export const WORKERS: WorkerSeed[] = [...OPTIONS_WORKERS, ...ETF_WORKERS, ...oandaWorkers()];
+/**
+ * Fast scalpers (ALPACA_WORKER_SET=scalp, the default): the same five ETF markets, all on 1-minute bars, long
+ * AND short, entering on nearly every bar that has momentum on the right side of VWAP and a fast EMA, and
+ * leaving within minutes on a 1 ATR stop, a 1.2 ATR target or a 4-minute time stop. Each trade is still sized
+ * so a stop-out costs at most `riskPerTrade`. The limits here are loose on purpose (many trades a day); the
+ * account-wide limits in the Risk drawer decide how fast it can really go. Meant for PAPER: on a live margin
+ * account under $25,000 the day-trade rule stops it after three round trips in five days.
+ */
+function scalpWorkers(): WorkerSeed[] {
+  const limits = { ...baseLimits, maxTradesPerDay: 200, maxShares: 100, maxPositionNotional: 5000, dailyLossLimit: 100, dailyGoal: 100_000, riskPerTrade: 5 };
+  const exits = { ...baseExits, stopAtr: 1.0, targetAtr: 1.2, exitOnVwapLoss: true, maxHoldMinutes: 4, flattenBeforeCloseMinutes: 5, cooldownBars: 1 };
+  const seed = (id: string, name: string, symbol: string, sortOrder: number): WorkerSeed => ({
+    venue: 'alpaca',
+    id,
+    name,
+    symbol,
+    strategyId: 'rapid-scalper',
+    timeframe: '1Min',
+    instrument: 'EQUITY',
+    allowShort: true,
+    entrySlippagePct: 0.05,
+    entryTimeoutSec: 10,
+    limits: { ...limits },
+    exits: { ...exits },
+    options: { ...baseOptions },
+    sortOrder,
+  });
+  return [
+    seed('scalp-gold', 'GOLD (GLD)', 'GLD', 1),
+    seed('scalp-nasdaq', 'NAS (QQQ)', 'QQQ', 2),
+    seed('scalp-us30', 'US30 (DIA)', 'DIA', 3),
+    seed('scalp-gbp', 'GBPUSD (FXB)', 'FXB', 4),
+    seed('scalp-eur', 'EURO (FXE)', 'FXE', 5),
+  ];
+}
+
+const SCALP_WORKERS = scalpWorkers();
+
+export const WORKERS: WorkerSeed[] = [...OPTIONS_WORKERS, ...ETF_WORKERS, ...SCALP_WORKERS, ...oandaWorkers()];
 
 /** The workers a deployment runs. Others stay in the database (with their history) but are not loaded. */
 export function activeWorkerIds(venue: Venue, set: AlpacaWorkerSet): string[] {
-  return WORKERS.filter((w) => w.venue === venue && (venue !== 'alpaca' || (set === 'etf' ? ETF_WORKERS : OPTIONS_WORKERS).some((x) => x.id === w.id))).map((w) => w.id);
+  const alpacaSet = set === 'scalp' ? SCALP_WORKERS : set === 'etf' ? ETF_WORKERS : OPTIONS_WORKERS;
+  return WORKERS.filter((w) => w.venue === venue && (venue !== 'alpaca' || alpacaSet.some((x) => x.id === w.id))).map((w) => w.id);
 }
 
 /**

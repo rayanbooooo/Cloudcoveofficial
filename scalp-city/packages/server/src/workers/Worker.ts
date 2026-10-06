@@ -223,10 +223,13 @@ export class Worker {
       void this.d.signals.markFaded(next.fadedSetupId).catch(() => undefined);
     }
     if (!next.setupId) return;
-    const newSetup = next.setupId !== prev.setupId;
+    // A setup is the run of momentum, identified by its direction and the bar it started forming on. A re-arming
+    // strategy gets a new setup id on every READY bar, which must not be reported as a brand-new setup each time.
+    const identity = (x: SignalState) => (x.setupId === null ? null : `${x.direction}:${x.formingSince}`);
+    const newSetup = identity(next) !== identity(prev);
     for (const c of next.conditions) {
-      const was = prev.setupId === next.setupId ? prev.conditions.find((p) => p.id === c.id)?.met : false;
-      if (c.met && !was && (newSetup || prev.setupId === next.setupId)) {
+      const was = !newSetup ? prev.conditions.find((p) => p.id === c.id)?.met : false;
+      if (c.met && !was) {
         t.add({ ...base, kind: 'signal', title: `${this.config.name} · ${c.label} confirmed`, detail: c.detail });
       }
     }

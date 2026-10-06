@@ -3,8 +3,11 @@ import path from 'node:path';
 import { z } from 'zod';
 import type { OptionsFeed, RiskLimits, StockFeed, TradingEnvironment, Venue } from '@scalp-city/shared';
 
-/** Which Alpaca workers run: ETF stand-ins for gold/Nasdaq/FX/US30, or the original options workers. */
-export type AlpacaWorkerSet = 'etf' | 'options';
+/**
+ * Which Alpaca workers run: fast 1-minute scalpers on the ETF stand-ins for gold/Nasdaq/FX/US30 (default), the same
+ * markets with the patient six-condition strategy, or the original options workers.
+ */
+export type AlpacaWorkerSet = 'scalp' | 'etf' | 'options';
 
 /** The only URL a LIVE trading context will ever talk to. */
 export const ALPACA_LIVE_TRADING_URL = 'https://api.alpaca.markets';
@@ -153,8 +156,8 @@ const EnvSchema = z.object({
   ALPACA_WORKER_SET: z
     .string()
     .optional()
-    .transform((v) => (v === undefined || v.trim() === '' ? 'etf' : v.trim().toLowerCase()))
-    .pipe(z.enum(['etf', 'options'])),
+    .transform((v) => (v === undefined || v.trim() === '' ? 'scalp' : v.trim().toLowerCase()))
+    .pipe(z.enum(['scalp', 'etf', 'options'])),
   OANDA_PRACTICE_TOKEN: optionalString,
   OANDA_PRACTICE_ACCOUNT_ID: optionalString,
   OANDA_LIVE_TOKEN: optionalString,

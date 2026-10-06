@@ -50,12 +50,21 @@ describe('migrations', () => {
   it('loads only the active worker set, and leaves the other set in the database', async () => {
     const repo = new WorkerRepository(db);
     await repo.seed();
-    const ids = async (set: 'etf' | 'options') => (await repo.list('alpaca', activeWorkerIds('alpaca', set))).map((w) => w.id);
+    const ids = async (set: 'scalp' | 'etf' | 'options') => (await repo.list('alpaca', activeWorkerIds('alpaca', set))).map((w) => w.id);
+    expect(await ids('scalp')).toEqual(['scalp-gold', 'scalp-nasdaq', 'scalp-us30', 'scalp-gbp', 'scalp-eur']);
     expect(await ids('etf')).toEqual(['etf-gold', 'etf-nasdaq', 'etf-us30', 'etf-gbp', 'etf-eur']);
     expect(await ids('options')).toEqual(['qqq-og', 'qqq', 'qqq-trend', 'spy', 'iwm']);
     // Nothing is deleted: switching the set back finds the old workers (and their history) as they were.
-    expect((await repo.list('alpaca')).length).toBe(10);
+    expect((await repo.list('alpaca')).length).toBe(15);
     expect((await repo.list('oanda', activeWorkerIds('oanda', 'etf'))).length).toBe(5);
+    const fast = (await repo.list('alpaca', activeWorkerIds('alpaca', 'scalp'))).map((w) => [w.symbol, w.instrument, w.timeframe, w.allowShort, w.strategyName]);
+    expect(fast).toEqual([
+      ['GLD', 'EQUITY', '1Min', true, 'Rapid Scalper'],
+      ['QQQ', 'EQUITY', '1Min', true, 'Rapid Scalper'],
+      ['DIA', 'EQUITY', '1Min', true, 'Rapid Scalper'],
+      ['FXB', 'EQUITY', '1Min', true, 'Rapid Scalper'],
+      ['FXE', 'EQUITY', '1Min', true, 'Rapid Scalper'],
+    ]);
     const etf = (await repo.list('alpaca', activeWorkerIds('alpaca', 'etf'))).map((w) => [w.symbol, w.instrument, w.timeframe, w.allowShort]);
     expect(etf).toEqual([
       ['GLD', 'EQUITY', '1Min', false],

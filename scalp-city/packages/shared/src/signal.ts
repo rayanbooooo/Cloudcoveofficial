@@ -34,6 +34,11 @@ export interface StrategyParams {
   formingThreshold: number;
   chargingThreshold: number;
   readyThreshold: number;
+  /**
+   * Fast scalping: every closed bar that is READY is its own setup, so it can take its own entry. By default a
+   * setup is used once and the next one only forms after it fades, which is what keeps a patient strategy rare.
+   */
+  rearmEachBar?: boolean;
 }
 
 export const DEFAULT_STRATEGY_PARAMS: StrategyParams = {
@@ -371,9 +376,11 @@ export function advanceSignal(
   const fadedSetupId = hadSetup && !survives && wasStrong ? prev.setupId : null;
 
   if (survives) {
+    // A re-arming strategy treats each READY bar as a fresh opportunity: the id carries the bar time.
+    const rearm = p.rearmEachBar === true && phase === 'READY';
     return {
       ...base,
-      setupId: prev.setupId,
+      setupId: rearm ? `${workerId}:${e.direction}:${e.barTime}` : prev.setupId,
       phase,
       formingSince: prev.formingSince,
       readySince: phase === 'READY' ? (prev.readySince ?? e.barTime) : null,

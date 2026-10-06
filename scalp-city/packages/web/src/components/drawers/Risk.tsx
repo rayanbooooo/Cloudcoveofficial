@@ -19,12 +19,28 @@ const OPTIONS_LIMIT_FIELDS: LimitField[] = [
   { key: 'maxOrderNotional', label: 'Max order value', unit: 'ccy' },
   { key: 'maxContracts', label: 'Max contracts' },
   { key: 'maxShares', label: 'Max shares' },
+  { key: 'maxRiskPerTrade', label: 'Max loss per trade (shares)', unit: 'ccy', hint: 'The most a share entry may lose if its stop is hit. Orders that would risk more are refused.' },
   { key: 'maxConcurrentPositions', label: 'Max positions' },
   { key: 'maxTradesPerDay', label: 'Max trades / day' },
   { key: 'maxOrdersPerMinute', label: 'Max orders / minute' },
   { key: 'maxPriceDeviationPct', label: 'Max price deviation', unit: '%' },
   { key: 'noEntriesBeforeCloseMinutes', label: 'No entries before close', unit: 'min' },
 ];
+
+/**
+ * Limits that let the 1-minute scalpers run at full speed on a PAPER account: up to 300 trades a day, all five
+ * workers in a position at once, $5,000 per position. Filling the form changes nothing until it is reviewed and confirmed.
+ */
+const FAST_SCALPING: Partial<Record<keyof RiskLimits, number>> = {
+  maxDailyLoss: 300,
+  maxPositionNotional: 5000,
+  maxOrderNotional: 5000,
+  maxShares: 100,
+  maxRiskPerTrade: 25,
+  maxConcurrentPositions: 5,
+  maxTradesPerDay: 300,
+  maxOrdersPerMinute: 40,
+};
 
 /** OANDA CFDs: sizes are units, so the per-order limits are money values and the per-trade loss at the stop is capped. */
 const CFD_LIMIT_FIELDS: LimitField[] = [
@@ -104,12 +120,30 @@ function LimitsEditor() {
           </Field>
         ))}
       </div>
-      <div className="mt-3 flex items-center gap-2">
+      <div className="mt-3 flex flex-wrap items-center gap-2">
         <Btn variant="outline" onClick={review} disabled={Object.keys(patch()).length === 0}>
           Review change
         </Btn>
+        {venue !== 'oanda' && (
+          <Btn
+            variant="ghost"
+            title="Fills the form for the 1-minute scalpers on a paper account. Nothing changes until you review and confirm."
+            onClick={() => {
+              setPreview(null);
+              setSaved(false);
+              setDraft(Object.fromEntries(Object.entries(FAST_SCALPING).map(([k, v]) => [k, String(v)])));
+            }}
+          >
+            Fast scalping preset
+          </Btn>
+        )}
         {saved && <span className="label !text-call">Saved · audit-logged</span>}
       </div>
+      {venue !== 'oanda' && (
+        <div className="label mt-1.5 !text-[9.5px]">
+          The preset is for PAPER: up to 300 trades a day, 5 positions at once, $5,000 per position. Lower these before real money. On a live margin account under $25,000 the day-trade rule still stops it after three round trips in five days.
+        </div>
+      )}
       {preview && (
         <div className={cx('mt-3 border p-3', preview.increasesRisk ? 'border-pending/60 bg-pending/5' : 'border-line-2')}>
           <div className={cx('display text-[13px]', preview.increasesRisk ? 'text-pending' : 'text-fg')}>{preview.increasesRisk ? 'THIS INCREASES RISK' : 'Tightens or keeps risk'}</div>

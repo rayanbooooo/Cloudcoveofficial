@@ -132,7 +132,8 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
       secure: app.config.cookieSecure,
       sameSite: 'strict',
       path: '/',
-      expires: new Date(result.session.expiresAt),
+      // Relative, so it holds under a test or demo clock that is not the real date (an absolute date would expire at once).
+      maxAge: Math.max(1, Math.round((result.session.expiresAt - app.clock.now()) / 1000)),
     });
     return { authenticated: true, username: result.session.username, csrfToken: result.session.csrfToken };
   });
@@ -160,7 +161,8 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
       secure: app.config.cookieSecure,
       sameSite: 'strict',
       path: '/',
-      expires: new Date(result.session.expiresAt),
+      // Relative, so it holds under a test or demo clock that is not the real date (an absolute date would expire at once).
+      maxAge: Math.max(1, Math.round((result.session.expiresAt - app.clock.now()) / 1000)),
     });
     return { authenticated: true, username: result.session.username, csrfToken: result.session.csrfToken };
   });

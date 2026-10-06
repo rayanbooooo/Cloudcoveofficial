@@ -214,9 +214,37 @@ previous copy finishes. The app says so and reconnects by itself; just wait.
   paper round trip exists.
 - **Strongly recommended:** run paper for a couple of weeks and read the Journal before risking money.
 
-### B3. How the ETF workers trade, and what protects you
+### B3. The fast scalpers (the default set)
 
-The five workers: **GOLD (GLD)**, **NAS (QQQ)**, **US30 (DIA)**, **GBPUSD (FXB)**, **EURO (FXE)**.
+`ALPACA_WORKER_SET=scalp` runs five **1-minute scalpers**: **GOLD (GLD)**, **NAS (QQQ)**, **US30 (DIA)**,
+**GBPUSD (FXB)** and **EURO (FXE)**, long **and short**.
+
+- **How often.** Each worker looks at every closed 1-minute bar. If price is on the right side of VWAP and a fast
+  EMA with real momentum behind it (about a third of an ATR over three bars), it enters, and **every bar that
+  qualifies can take its own entry**: expect several trades an hour per worker when a market is moving, none when it
+  is flat. A patient strategy takes one trade per setup; this one does not wait.
+- **How it leaves.** 1 ATR stop, 1.2 ATR target, a 4-minute time stop, or when price loses VWAP. It is back in the
+  market a bar later. Everything is flattened 5 minutes before the close.
+- **Size.** Each entry risks at most $5 at its stop (whole shares, capped by your position limits).
+- **Open the throttle.** The account-wide limits in the **Risk drawer** decide how fast it can really go. A fresh
+  install is deliberately slow (a few trades a day, one position at a time). Use **Fast scalping preset**
+  in the Risk drawer, review, confirm: up to 300 trades a day, 5 positions at once, $5,000 per position. Then turn
+  on **Autotrading** and **All on** (Workers panel).
+- **Honest expectations.** More trades is not more profit. Each trade pays the spread and gives up a little to
+  slippage, and a quick 1-minute momentum rule has no proven edge: with small targets those costs can eat all of
+  it. Paper fills are also optimistic (no queue, no market impact). Use this to collect many trades quickly and read
+  the Journal; do not read a good paper day as a plan.
+- **Paper only, in practice.** A margin account under $25,000 may make 3 day trades per 5 business days, and a
+  scalper makes dozens a day: live, the bot hits that limit and sits out (it enforces the rule). A cash account can
+  only trade settled cash. Short selling needs a margin account with shorting enabled.
+- **FXB and FXE** trade little and their spreads are wide against a 1-minute move: expect "spread too wide" and
+  stale-data blocks there; most of the action will be GLD, QQQ and DIA.
+
+### B3b. The patient ETF set, and what protects you
+
+`ALPACA_WORKER_SET=etf` runs the same five markets with the six-condition strategy (a few trades a day, long only).
+
+The five workers: **GOLD (GLD)**, **NAS (QQQ)**, **US30 (DIA)**, **GBPUSD (FXB)**, **EURO (FXE)**. Everything below about stops, size and limits applies to both sets.
 
 - **One signal, mechanical rules.** Six checks (VWAP, EMA50, momentum, opening range, structure,
   volume) must all agree before an entry. Nothing here has been shown to make money; paper trading
