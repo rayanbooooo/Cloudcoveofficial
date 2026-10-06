@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Api, ApiError } from '../lib/api';
 import { age, countdown, humanize, timeET } from '../lib/format';
+import { autotradingState, isFault } from '../lib/status';
 import { serverNow, useStore } from '../store/store';
 import { Btn, cx, Dot, Toggle } from './ui';
 
@@ -143,32 +144,39 @@ export function SafetyControls({ vertical }: { vertical?: boolean }) {
 export function StatusLine() {
   const system = useStore((s) => s.system);
   const conn = useStore((s) => s.conn);
+  const openDrawer = useStore((s) => s.openDrawer);
   if (!system) return null;
   const live = system.env === 'live';
-  const t = system.trading;
-  const reasons = t.haltReasons.filter((r) => !(r.code === 'AUTOTRADING_OFF'));
-  const autotradingOn = system.controls.autotrading && !system.controls.killSwitch.active;
-  const halted = autotradingOn && !t.entriesAllowed;
+  const a = autotradingState(system);
   const parts = [
     live ? 'LIVE' : system.venue === 'oanda' ? 'PRACTICE' : 'PAPER',
-    system.controls.killSwitch.active ? 'KILL SWITCH ACTIVE' : autotradingOn ? (halted ? 'AUTOTRADING HALTED' : 'AUTOTRADING ENABLED') : 'AUTOTRADING OFF',
+    a.label,
     `${system.broker.name} ${humanize(system.broker.status)}`,
     system.venue === 'oanda' ? `SESSION ${system.market.isOpen ? 'OPEN' : 'CLOSED'}` : `MARKET ${humanize(system.market.label)}`,
   ];
-  const tone = system.controls.killSwitch.active || halted ? 'text-put' : autotradingOn ? 'text-call' : 'text-fg-2';
+  const tone = a.tone === 'halted' ? 'text-put' : a.tone === 'on' ? 'text-call' : a.tone === 'waiting' ? 'text-pending' : 'text-fg-2';
   return (
     <div className={cx('flex min-h-[26px] flex-wrap items-center gap-x-3 gap-y-1 border-b border-line px-3 py-1 text-[10.5px]', live ? 'bg-live/[0.07]' : 'bg-ink-900/80')}>
       <span className={cx('label-strong', tone)}>{parts.join(' · ')}</span>
-      {reasons.length > 0 && (
+      {a.reasons.length > 0 && (
         <span className="flex flex-wrap items-center gap-2">
-          <span className="label">{halted || system.controls.killSwitch.active ? 'Reason' : 'Blocks'}</span>
-          {reasons.map((r) => (
-            <span key={r.code} className="label-strong rounded-[1px] border border-line-2 px-1.5 py-[1px] text-[10px] text-pending">
+          <span className="label">{a.tone === 'halted' ? 'Reason' : 'Blocks'}</span>
+          {a.reasons.map((r) => (
+            <span
+              key={r.code}
+              className={cx('label-strong rounded-[1px] border px-1.5 py-[1px] text-[10px]', a.tone === 'halted' && isFault(r) ? 'border-put/60 text-put' : 'border-line-2 text-pending')}
+            >
               {r.message}
             </span>
           ))}
+          {a.tone === 'halted' && !system.controls.killSwitch.active && (
+            <button type="button" className="focus-ring label-strong rounded-[1px] border border-line-2 px-1.5 py-[1px] text-[10px] text-fg-2 hover:text-fg" onClick={() => openDrawer('risk')}>
+              Open risk &amp; breakers
+            </button>
+          )}
         </span>
       )}
+      {a.detail && <span className="label">{a.detail}</span>}
       {system.endpoints.nonStandard && (
         <span className="label-strong ml-auto whitespace-nowrap rounded-[1px] bg-pending px-1.5 py-[1px] text-[10px] text-ink-950">NON-STANDARD BROKER ENDPOINT · {system.endpoints.trading}</span>
       )}
