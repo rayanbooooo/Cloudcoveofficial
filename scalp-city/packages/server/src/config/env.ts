@@ -22,6 +22,14 @@ export const OANDA_PRACTICE_STREAM_URL = 'https://stream-fxpractice.oanda.com';
 export const DEFAULT_ETF_SYMBOLS = ['GLD', 'QQQ', 'DIA', 'FXB', 'FXE'];
 export const DEFAULT_OPTION_SYMBOLS = ['QQQ', 'SPY', 'IWM'];
 
+/**
+ * When OANDA workers may open positions (New York time, weekdays): most of the day, but not the evening.
+ * OANDA's daily rollover is at 17:00 New York (spreads blow up and stops can trigger on the spread) and
+ * its weekly close is Friday 17:00. Ending the window at 16:30 closes every position before both, so
+ * nothing is carried through a rollover or a weekend. 00:00-23:59 trades through the evening too.
+ */
+export const DEFAULT_OANDA_SESSION = '00:00-16:30';
+
 /** Gold, Nasdaq 100, GBP/USD, EUR/JPY and the Dow — OANDA instrument names. */
 export const DEFAULT_OANDA_INSTRUMENTS = ['XAU_USD', 'NAS100_USD', 'GBP_USD', 'EUR_JPY', 'US30_USD'];
 
@@ -157,7 +165,7 @@ const EnvSchema = z.object({
   OANDA_LIVE_STREAM_URL: optionalString,
   OANDA_INSTRUMENTS: optionalString,
   OANDA_SESSION: optionalString,
-  OANDA_SKIP_US_HOLIDAYS: flag(true),
+  OANDA_SKIP_US_HOLIDAYS: flag(false),
   ALPACA_API_KEY: optionalString,
   ALPACA_API_SECRET: optionalString,
   ALPACA_PAPER_API_KEY: optionalString,
@@ -247,9 +255,9 @@ function oandaPair(token: string | undefined, accountId: string | undefined, lab
 
 /** "09:30-16:00" → { open: "09:30", close: "16:00" } (New York time). */
 function parseSession(raw: string | undefined): { open: string; close: string } {
-  const v = raw ?? '09:30-16:00';
+  const v = raw ?? DEFAULT_OANDA_SESSION;
   const m = /^(\d{1,2}):(\d{2})\s*-\s*(\d{1,2}):(\d{2})$/.exec(v.trim());
-  if (!m) throw new ConfigError(`OANDA_SESSION must look like 09:30-16:00 (New York time), got "${v}"`);
+  if (!m) throw new ConfigError(`OANDA_SESSION must look like 00:00-16:30 (New York time), got "${v}"`);
   const [oh, om, ch, cm] = [Number(m[1]), Number(m[2]), Number(m[3]), Number(m[4])];
   if (oh > 23 || ch > 23 || om > 59 || cm > 59) throw new ConfigError(`OANDA_SESSION has an invalid time: "${v}"`);
   if (ch * 60 + cm <= oh * 60 + om) throw new ConfigError(`OANDA_SESSION must end after it starts (same day), got "${v}"`);

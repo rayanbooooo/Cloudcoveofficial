@@ -307,6 +307,9 @@ async function mainOanda(): Promise<void> {
     OANDA_PRACTICE_STREAM_URL: fake.url,
     SESSION_SECRET: 'demo-harness-session-secret-not-for-production',
     DATABASE_URL: 'pglite://memory',
+    // The demo's morning paths assume a 09:30 open.
+    OANDA_SESSION: '09:30-16:00',
+    OANDA_SKIP_US_HOLIDAYS: 'true',
     OANDA_MAX_DAILY_LOSS: '1000',
     OANDA_MAX_RISK_PER_TRADE: '50',
     OANDA_MAX_POSITION_NOTIONAL: '200000',

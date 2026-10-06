@@ -7,21 +7,21 @@ suggests the strategy will make money.
 
 ## Choose the broker
 
-Scalp City trades through **one broker per server**. The default is **Alpaca**, which this guide
-assumes (Part B). OANDA is an optional alternative for the real spot markets (Part A).
+Scalp City trades through **one broker per server**. This installation is set up for **OANDA**
+(Part A): the real gold, Nasdaq, GBP/USD, EUR/JPY and US30 markets, nearly around the clock on
+weekdays. Alpaca (Part B) is the alternative: ETF stand-ins for those markets, US stock hours only.
 
 | You want to trade | Broker | `BROKER=` | "Paper" means |
 |---|---|---|---|
-| US stocks and ETFs: **GLD** (gold), **QQQ** (Nasdaq), **DIA** (US30), **FXB** (GBPUSD), **FXE** (euro), or options | **Alpaca** (default) | `alpaca` | an Alpaca **Paper** account |
-| The real gold, Nasdaq 100, GBP/USD, EUR/JPY and US30 markets (FX, metals, index CFDs) | OANDA (optional) | `oanda` | an OANDA fxTrade **Practice** account |
+| Gold, Nasdaq 100, GBP/USD, EUR/JPY, US30 (FX, metals, index CFDs), nearly 24 hours on weekdays | **OANDA** (the default in `render.yaml`) | `oanda` | an OANDA fxTrade **Practice** account |
+| Shares of **GLD** (gold), **QQQ** (Nasdaq), **DIA** (US30), **FXB** (GBPUSD), **FXE** (euro), or options; US market hours only | Alpaca | `alpaca` | an Alpaca **Paper** account |
 
-Alpaca cannot trade spot gold, FX or index CFDs, so on Alpaca the bot trades **ETF stand-ins**:
-shares of funds that follow those markets. They are real market data and real orders, but they are
-not the same instruments: they only trade during US stock hours, move less per minute, and there is
-no ETF for EUR/JPY (FXE follows the euro against the dollar instead). Orders, positions, risk limits
-and circuit breakers are kept per broker, so switching later never mixes the two books.
+Alpaca cannot trade spot gold, FX or index CFDs, so on Alpaca the bot trades ETF stand-ins: shares of
+funds that follow those markets. They are real market data and real orders, but not the same
+instruments, they only trade while the US market is open, and there is no ETF for EUR/JPY. Orders,
+positions, risk limits and circuit breakers are kept per broker, so switching never mixes the two books.
 
-**Part B** is Alpaca, **Part A** is OANDA, and the safety routine at the end applies to both.
+**Part A** is OANDA, **Part B** is Alpaca, and the safety routine at the end applies to both.
 
 ---
 
@@ -138,7 +138,7 @@ Do this outside market hours.
 - **Fills come from OANDA's transaction stream**, with a replay of anything missed after a
   reconnect. A position or a fill is never assumed; P&L is OANDA's own figure per fill, in account currency.
 - **Trading window.** OANDA markets trade nearly 24 hours, so workers open new positions only
-  inside `OANDA_SESSION` (default `09:30-16:00` New York time, weekdays, skipping US holidays). The
+  inside `OANDA_SESSION` (default `00:00-16:30` New York time, weekdays; see A5). The
   top bar shows it as **Session**. Workers flatten 10 minutes before the window ends. OANDA's own
   per-market *tradeable* flag has the last word: a closed or halted market shows **CLOSED** and
   entries are refused.
@@ -154,15 +154,23 @@ Do this outside market hours.
   positions keep their broker-held stops while it is down.
 
 
-### A5. Around the clock
+### A5. When it trades
 
-By default OANDA workers open positions only inside `OANDA_SESSION` (09:30-16:00 New York, weekdays, US
-holidays skipped), because that is when the strategy has been described and the markets are busiest. OANDA's
-markets trade nearly 24 hours on weekdays, so to let workers trade whenever Autotrading is on, set
-`OANDA_SESSION=00:00-23:59` and `OANDA_SKIP_US_HOLIDAYS=false` in Render and redeploy. Overnight the spread is
-wider and prices move less, and every position is closed 10 minutes before the end of the window. Start on
-PRACTICE and read the Journal before trusting it. (Share ETFs on Alpaca cannot do this: they only trade while the
-US market is open, plus thin extended hours that need Alpaca's paid real-time data.)
+Workers open positions only inside `OANDA_SESSION`, New York time, weekdays. The default is
+`00:00-16:30`, which is 06:00 to 22:30 in Amsterdam. It stops there on purpose: OANDA's daily rollover is
+at 17:00 New York (spreads blow up for a few minutes, which can trigger stops) and its weekly close is
+Friday 17:00. Every position is closed 10 minutes before the window ends, so nothing is carried through a
+rollover or a weekend, and there are no new entries in those last 10 minutes.
+
+- **To trade through the evening too,** set `OANDA_SESSION=00:00-23:59` in Render and redeploy. Expect wider
+  spreads around 17:00 New York and thinner markets overnight; the bot refuses a trade when the spread is
+  too wide for its stop, but a stop can still trigger on a spread spike. Prefer the default until the Journal
+  says otherwise.
+- **To trade only some hours,** narrow it, e.g. `02:00-16:30` starts at the London open.
+- **US holidays** are traded by default (`OANDA_SKIP_US_HOLIDAYS=false`): FX and gold are open, but US index
+  CFDs can be thin. Set it to `true` to skip them.
+- **Autotrading** must still be switched on (top bar, then each worker), and the instrument itself must be
+  tradeable at that moment: OANDA also pauses some markets for a daily break.
 
 ---
 

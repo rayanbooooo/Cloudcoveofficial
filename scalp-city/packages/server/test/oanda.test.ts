@@ -164,6 +164,21 @@ describe('OANDA trading calendar', () => {
     expect(sessionClock(ny('2026-10-10T12:00'), rules).isOpen).toBe(false); // Saturday
   });
 
+  it('the default window runs from midnight to 16:30 New York: nothing is open through the 17:00 rollover or the weekend', () => {
+    const wide = { open: '00:00', close: '16:30', skipUsHolidays: false };
+    expect(sessionClock(ny('2026-10-06T03:00'), wide)).toMatchObject({ isOpen: true, nextClose: ny('2026-10-06T16:30') }); // 09:00 in Amsterdam
+    expect(sessionClock(ny('2026-10-06T16:29'), wide).isOpen).toBe(true);
+    const evening = sessionClock(ny('2026-10-06T17:00'), wide); // the daily rollover
+    expect(evening.isOpen).toBe(false);
+    expect(evening.nextOpen).toBe(ny('2026-10-07T00:00'));
+    const fridayClose = sessionClock(ny('2026-10-09T16:45'), wide); // before OANDA's Friday 17:00 close, already shut
+    expect(fridayClose.isOpen).toBe(false);
+    expect(fridayClose.nextOpen).toBe(ny('2026-10-12T00:00'));
+    expect(sessionClock(ny('2026-10-11T20:00'), wide).isOpen).toBe(false); // Sunday evening
+    // Holidays are traded when not skipped: Thanksgiving is just another day for FX and gold.
+    expect(configuredSessions('2026-11-26', '2026-11-26', wide).map((d) => d.date)).toEqual(['2026-11-26']);
+  });
+
   it('honors a different window (e.g. the London session)', () => {
     const london = { open: '03:00', close: '11:30', skipUsHolidays: true };
     expect(sessionClock(ny('2026-10-05T04:00'), london).isOpen).toBe(true);
@@ -180,8 +195,9 @@ describe('OANDA configuration', () => {
     expect(c.venue).toBe('oanda');
     expect(c.tradingEnvironment).toBe('paper');
     expect(c.symbols).toEqual(['XAU_USD', 'NAS100_USD', 'GBP_USD', 'EUR_JPY', 'US30_USD']);
-    expect(c.oanda.session).toEqual({ open: '09:30', close: '16:00' });
-    expect(c.oanda.skipUsHolidays).toBe(true);
+    // Most of the day, ending before OANDA's 17:00 New York rollover and weekly close; holidays are not skipped.
+    expect(c.oanda.session).toEqual({ open: '00:00', close: '16:30' });
+    expect(c.oanda.skipUsHolidays).toBe(false);
     expect(hasCredentials(c, 'paper')).toBe(true);
     expect(hasCredentials(c, 'live')).toBe(false);
     expect(tradingBaseUrl(c, 'paper')).toBe('https://api-fxpractice.oanda.com');

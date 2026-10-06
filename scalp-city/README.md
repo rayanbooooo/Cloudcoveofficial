@@ -3,14 +3,15 @@
 A self-hosted, single-user trading command center. Autonomous scalping workers build a "charge" from six
 technical conditions and, only if every risk check passes, trade through one broker per server:
 
-- **Alpaca** (`BROKER=alpaca`, the default): shares of **ETF stand-ins**: **GLD** (gold), **QQQ** (Nasdaq),
-  **DIA** (US30), **FXB** (GBPUSD) and **FXE** (euro), long by default, each entry sized so a stop-out costs
-  at most the per-trade risk limit. Alpaca cannot trade spot gold, FX or index CFDs, and no ETF tracks
-  EUR/JPY, so these are stand-ins: US stock hours only, and they move less per minute. The stop is held by
-  this server, not by Alpaca. The original QQQ/SPY/IWM options workers remain (`ALPACA_WORKER_SET=options`).
-- **OANDA** (`BROKER=oanda`, optional): the real **gold, Nasdaq 100, GBP/USD, EUR/JPY and US30** markets
-  (FX, metals and index CFDs), long and short, with a stop held at the broker on every entry. Paper = an
-  OANDA fxTrade *Practice* account.
+- **OANDA** (`BROKER=oanda`, the default in `render.yaml`): the real **gold, Nasdaq 100, GBP/USD, EUR/JPY and
+  US30** markets (FX, metals and index CFDs), long and short, with a stop held at the broker on every entry.
+  Workers trade weekdays from 00:00 to 16:30 New York time (06:00 to 22:30 in Amsterdam), ending before
+  OANDA's 17:00 rollover and weekly close. Paper = an OANDA fxTrade *Practice* account.
+- **Alpaca** (`BROKER=alpaca`): shares of **ETF stand-ins**: **GLD** (gold), **QQQ** (Nasdaq), **DIA** (US30),
+  **FXB** (GBPUSD) and **FXE** (euro), long by default, each entry sized so a stop-out costs at most the
+  per-trade risk limit. Alpaca cannot trade spot gold, FX or index CFDs, and no ETF tracks EUR/JPY, so these
+  are stand-ins: US stock hours only. The stop is held by this server, not by Alpaca. The original
+  QQQ/SPY/IWM options workers remain (`ALPACA_WORKER_SET=options`).
 
 A 3D city visualizes what the workers are doing, and clicking a tower puts you at that worker's desk. Every
 number on screen comes from the broker or the market data feed.
@@ -106,7 +107,7 @@ npm run dev
   and their size/margin rules, live prices, candles, both streams and the clock. It places nothing and
   never prints the token.
 - **Trading window.** OANDA trades nearly 24 hours, so new positions open only inside `OANDA_SESSION`
-  (default `09:30-16:00` New York, weekdays, US holidays skipped); OANDA's per-market `tradeable` flag
+  (default `00:00-16:30` New York, weekdays, US holidays traded); OANDA's per-market `tradeable` flag
   has the last word.
 - **Risk limits are separate for OANDA** (`OANDA_MAX_*`, in account currency) so Alpaca's share/option
   sized `MAX_*` values can never block or inflate a CFD order.

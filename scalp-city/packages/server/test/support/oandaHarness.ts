@@ -63,6 +63,9 @@ export async function startOandaE2E(opts: { env?: Record<string, string>; fake?:
     OANDA_PRACTICE_API_URL: fake.url,
     OANDA_PRACTICE_STREAM_URL: fake.url,
     SESSION_SECRET: 'e2e-session-secret-0123456789-abcdefghijklmnop',
+    // The scripted scenarios model a 09:30 open and a 15:50 end-of-day flatten.
+    OANDA_SESSION: '09:30-16:00',
+    OANDA_SKIP_US_HOLIDAYS: 'true',
     OANDA_MAX_POSITION_NOTIONAL: '50000',
     OANDA_MAX_ORDER_NOTIONAL: '50000',
     OANDA_MAX_RISK_PER_TRADE: '25',

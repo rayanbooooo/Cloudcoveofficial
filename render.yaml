@@ -18,25 +18,54 @@ services:
     dockerContext: .
     # Change to main once this branch is merged.
     branch: claude/zen-franklin-lzwngb
-    region: virginia # US East: close to Alpaca
+    region: virginia # US East: close to Alpaca and OANDA's servers
     plan: starter # always on; free instances sleep, which a trading bot cannot do
     numInstances: 1
     healthCheckPath: /api/healthz
     # Deploy by hand, outside market hours: a deploy restarts the trader.
     autoDeploy: false
     envVars:
-      # Which broker trades. alpaca = US stocks, ETFs and options (the default here).
-      # oanda = gold/Nasdaq/FX CFDs on an OANDA account: optional, add its env vars by hand
-      # in Render if you ever want it (GO_LIVE.md, Part A).
+      # Which broker trades. oanda = gold, Nasdaq 100, GBP/USD, EUR/JPY and US30 on an OANDA account
+      # (CFDs/FX, nearly 24 hours on weekdays). alpaca = shares of the ETF stand-ins (GLD, QQQ, DIA,
+      # FXB, FXE), US stock hours only; its settings further down stay in place but are unused.
       - key: BROKER
-        value: alpaca
-      # Start in PAPER. Switching to LIVE happens later, deliberately (GO_LIVE.md).
+        value: oanda
+      # Start in PAPER (= OANDA fxTrade PRACTICE). Switching to LIVE happens later, deliberately (GO_LIVE.md).
       - key: TRADING_ENVIRONMENT
         value: paper
       - key: LIVE_TRADING_ENABLED
         value: "false"
-      # Alpaca secrets: Render asks for these when you create the Blueprint. They live only
-      # in Render's environment, never in git or in chat.
+      # OANDA secrets: Render asks for these. They live only in Render's environment, never in git or in chat.
+      # Leave the LIVE pair empty until you are ready for real money.
+      - key: OANDA_PRACTICE_TOKEN
+        sync: false
+      - key: OANDA_PRACTICE_ACCOUNT_ID
+        sync: false
+      - key: OANDA_LIVE_TOKEN
+        sync: false
+      - key: OANDA_LIVE_ACCOUNT_ID
+        sync: false
+      # When workers may open positions, New York time, weekdays: 00:00-16:30 is 06:00-22:30 in
+      # Amsterdam. It ends before OANDA's 17:00 New York rollover and weekly close, so nothing is carried
+      # through either. 00:00-23:59 would trade through the evening too (wider spreads at rollover).
+      - key: OANDA_SESSION
+        value: "00:00-16:30"
+      - key: OANDA_SKIP_US_HOLIDAYS
+        value: "false"
+      # Deliberately small starting limits for OANDA, in your account currency. They seed the risk
+      # settings on first boot; raise them in the app (Risk drawer) once results justify it. The Alpaca
+      # MAX_* block further down does not apply to OANDA.
+      - key: OANDA_MAX_DAILY_LOSS
+        value: "100"
+      - key: OANDA_MAX_RISK_PER_TRADE
+        value: "20"
+      - key: OANDA_MAX_POSITION_NOTIONAL
+        value: "10000"
+      - key: OANDA_MAX_CONCURRENT_POSITIONS
+        value: "3"
+      - key: OANDA_MAX_TRADES_PER_DAY
+        value: "10"
+      # Alpaca secrets (only used when BROKER=alpaca). They live only in Render's environment.
       - key: ALPACA_PAPER_API_KEY
         sync: false
       - key: ALPACA_PAPER_API_SECRET
