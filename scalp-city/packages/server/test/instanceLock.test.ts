@@ -55,6 +55,48 @@ describe('single-instance trading lock', () => {
     await b.release();
   });
 
+  pgIt('frees the lock from a holder that stopped heartbeating, and leaves a live holder alone', async () => {
+    const k = key();
+    const lost: string[] = [];
+    const dead = new InstanceLock(url!, (r) => lost.push(r), { key: k, heartbeatMs: 3_600_000 }); // never touches its connection again
+    const live = new InstanceLock(url!, () => {}, { key: k });
+    const waiter = new InstanceLock(url!, () => {}, { key: k });
+    expect(await dead.tryAcquire()).toBe(true);
+    const deadPid = dead.backendPid; // gone once its session is ended
+    expect(await waiter.tryAcquire()).toBe(false);
+    // Fresh holder: nothing to evict.
+    expect(await waiter.evictDeadHolder(400)).toBeNull();
+    await sleep(600);
+    // Idle past the limit with no heartbeat: its session is ended, which frees the lock.
+    const evicted = await waiter.evictDeadHolder(400);
+    expect(evicted?.pid).toBe(deadPid);
+    expect(evicted!.idleMs).toBeGreaterThanOrEqual(400);
+    await sleep(100);
+    expect(lost.length).toBe(1); // the evicted process learns it lost the lock
+    expect(await live.tryAcquire()).toBe(true);
+    // A holder that keeps its heartbeat is never evicted, however long we wait.
+    const beating = new InstanceLock(url!, () => {}, { key: key(), heartbeatMs: 50 });
+    expect(await beating.tryAcquire()).toBe(true);
+    const other = new InstanceLock(url!, () => {}, { key: (beating as unknown as { key: [number, number] }).key });
+    await sleep(500);
+    expect(await other.evictDeadHolder(400)).toBeNull();
+    expect(await other.tryAcquire()).toBe(false);
+    await Promise.all([live.release(), beating.release()]);
+  });
+
+  pgIt('a waiting process takes over from a dead holder by itself', async () => {
+    const k = key();
+    const dead = new InstanceLock(url!, () => {}, { key: k, heartbeatMs: 3_600_000 });
+    const next = new InstanceLock(url!, () => {}, { key: k });
+    expect(await dead.tryAcquire()).toBe(true);
+    const deadPid = dead.backendPid;
+    const evictions: number[] = [];
+    const got = await next.acquire({ retryMs: 50, staleHolderMs: 300, onEvict: (h) => evictions.push(h.pid) });
+    expect(got).toBe(true);
+    expect(evictions).toEqual([deadPid]);
+    await next.release();
+  });
+
   it('standby server passes health checks and trades nothing', async () => {
     const s = await startStandbyServer('127.0.0.1', 0);
     const health = await fetch(`http://127.0.0.1:${s.port}/api/healthz`);

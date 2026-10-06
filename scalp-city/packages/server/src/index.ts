@@ -53,6 +53,9 @@ async function main(): Promise<void> {
       standby = await startStandbyServer(config.host, config.port);
     },
     onError: (err) => logger.warn({ err: err.message }, 'trading lock attempt failed; retrying'),
+    // A previous instance that vanished without closing its connection would otherwise hold the lock for hours.
+    staleHolderMs: 60_000,
+    onEvict: (h) => logger.warn({ pid: h.pid, idleSeconds: Math.round(h.idleMs / 1000) }, 'the previous trading instance stopped responding; ended its stale database session to take over'),
   });
   if (standby) await (standby as { close(): Promise<void> }).close();
   trading = true;

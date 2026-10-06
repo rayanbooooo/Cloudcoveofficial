@@ -285,10 +285,10 @@ function TowerBody({
           >
             <div className="flex items-center justify-between gap-2">
               <span className="display truncate text-[10.5px] tracking-[0.12em] text-fg">{w.config.name}</span>
-              {!w.autotradeEnabled && <span className="label text-[8px]">AUTO OFF</span>}
             </div>
             <div className="label-strong mt-px truncate text-[9px]" style={{ color: accentCss }}>
               {w.market && !w.market.listed ? 'NOT OFFERED' : STATE_LABEL[state]}
+              {!w.autotradeEnabled ? ' · AUTO OFF' : ''}
               {used ? ' · SIGNAL USED' : ''}
               {w.unmanagedWarning ? ' · !' : ''}
             </div>

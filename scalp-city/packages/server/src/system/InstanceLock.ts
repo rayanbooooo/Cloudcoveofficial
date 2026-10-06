@@ -68,11 +68,53 @@ export class InstanceLock {
   }
 
   /**
-   * Retry until acquired. `onWait` runs once, after the first failed attempt
-   * (used to start the standby server). Returns false if `signal` aborts.
+   * Free the lock from a holder that is dead but not yet noticed. When a host is torn down without closing
+   * its database connection, Postgres keeps that session (and its lock) until the connection times out,
+   * which can take hours, and every new instance would wait in standby for all that time. A live holder
+   * touches its connection every `heartbeatMs`, so a lock session idle for `staleMs` or longer belongs to a
+   * dead process: end it. Only the lock's own session is ever ended, and never one that is busy or fresh.
+   * (A holder that was merely unreachable finds its connection gone at its next heartbeat and exits.)
    */
-  async acquire(opts: { retryMs?: number; onWait?: () => void | Promise<void>; onError?: (err: Error) => void; signal?: AbortSignal } = {}): Promise<boolean> {
+  async evictDeadHolder(staleMs: number): Promise<{ pid: number; idleMs: number } | null> {
+    const client = new pg.Client({ connectionString: this.connectionString, connectionTimeoutMillis: 5_000, application_name: 'scalp-city-lock-watch' });
+    await client.connect();
+    try {
+      const { rows } = await client.query<{ pid: number; state: string | null; idle_ms: string | null }>(
+        `SELECT l.pid, a.state, EXTRACT(EPOCH FROM (now() - a.state_change)) * 1000 AS idle_ms
+           FROM pg_locks l JOIN pg_stat_activity a ON a.pid = l.pid
+          WHERE l.locktype = 'advisory' AND l.classid = $1::oid AND l.objid = $2::oid AND l.objsubid = 2 AND l.granted
+            AND a.application_name = 'scalp-city-trading-lock' AND l.pid <> pg_backend_pid()`,
+        this.key,
+      );
+      const holder = rows[0];
+      if (!holder || holder.idle_ms === null || holder.state === 'active') return null;
+      const idleMs = Number(holder.idle_ms);
+      if (!(idleMs >= staleMs)) return null;
+      const { rows: done } = await client.query<{ ok: boolean }>('SELECT pg_terminate_backend($1) AS ok', [holder.pid]);
+      return done[0]?.ok === true ? { pid: holder.pid, idleMs } : null;
+    } finally {
+      await client.end().catch(() => undefined);
+    }
+  }
+
+  /**
+   * Retry until acquired. `onWait` runs once, after the first failed attempt
+   * (used to start the standby server). With `staleHolderMs`, a holder whose
+   * heartbeat stopped that long ago is evicted (see evictDeadHolder).
+   * Returns false if `signal` aborts.
+   */
+  async acquire(
+    opts: {
+      retryMs?: number;
+      onWait?: () => void | Promise<void>;
+      onError?: (err: Error) => void;
+      onEvict?: (holder: { pid: number; idleMs: number }) => void;
+      staleHolderMs?: number;
+      signal?: AbortSignal;
+    } = {},
+  ): Promise<boolean> {
     let waited = false;
+    let lastCheck = 0;
     for (;;) {
       if (opts.signal?.aborted) return false;
       try {
@@ -83,6 +125,15 @@ export class InstanceLock {
       if (!waited) {
         waited = true;
         await opts.onWait?.();
+      }
+      if (opts.staleHolderMs !== undefined && Date.now() - lastCheck >= Math.min(15_000, opts.staleHolderMs)) {
+        lastCheck = Date.now();
+        try {
+          const evicted = await this.evictDeadHolder(opts.staleHolderMs);
+          if (evicted) opts.onEvict?.(evicted);
+        } catch (err) {
+          opts.onError?.(err as Error);
+        }
       }
       await new Promise((r) => setTimeout(r, opts.retryMs ?? 3_000));
     }
@@ -114,7 +165,7 @@ export class InstanceLock {
 const STANDBY_HTML = `<!doctype html><html><head><meta charset="utf-8"><meta http-equiv="refresh" content="5"><title>Scalp City · standby</title></head>
 <body style="margin:0;background:#04070c;color:#cfd8e6;font:14px/1.5 system-ui,sans-serif;display:grid;place-items:center;height:100vh">
 <div style="max-width:420px;padding:24px;text-align:center"><div style="letter-spacing:.24em;font-weight:700">SCALP CITY</div>
-<p>Starting up: the previous instance is still finishing. Only one instance trades at a time. This page refreshes on its own.</p></div></body></html>`;
+<p>Starting up: the previous instance is still finishing. Only one instance trades at a time. This page refreshes on its own.</p><p style="font-size:12px;opacity:.7">Still here after five minutes? Check that only one Scalp City service uses this database, or restart this one.</p></div></body></html>`;
 
 /**
  * Minimal server for a waiting instance: health checks pass (so a platform's
