@@ -519,6 +519,8 @@ export class FakeAlpaca {
     this.orders.set(o.id, o);
     send(200, this.orderJson(o));
     setTimeout(() => {
+      // A price move in the meantime may already have filled (or cancelled) it.
+      if (o.status !== 'accepted') return;
       o.status = 'new';
       o.updated_at = this.now();
       this.emitTrade('new', o);
@@ -548,6 +550,7 @@ export class FakeAlpaca {
 
   /** Execute `qty` of an order at `price` (tests may call directly for partial fills). */
   fill(o: FakeOrder, qty: number, price: number): void {
+    if (!(qty > 0)) return;
     const mult = o.asset_class === 'us_option' ? 100 : 1;
     const prevQty = o.filled_qty;
     o.filled_qty += qty;

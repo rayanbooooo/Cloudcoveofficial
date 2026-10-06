@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { instrumentName, isOandaSymbol, parseOccSymbol, type CityEvent } from '@scalp-city/shared';
 import { money, px, qtyStr } from '../lib/format';
 import { serverNow, useStore } from '../store/store';
+import { emitCityFx } from './cityBus';
 import { useLabelLayer } from './labelLayer';
 import { VAULT_POSITION, type Vec3 } from './layout';
 import { createBeamMaterial, createPulseMaterial, STATE_COLORS } from './materials';
@@ -77,20 +78,29 @@ export function Effects({ anchors, onKill }: { anchors: Map<string, Anchor>; onK
       add.push({ key: k(), kind: 'pulse', pos: a.position, top: a.top, color, born, dur: 1.8 });
       if (ev.kind !== 'ORDER_SUBMITTED') add.push({ key: k(), kind: 'column', pos: a.position, top: a.top, color, born, dur: 1.2 });
       const what = `${qtyStr(ev.qty)} × ${instrument(ev)}`;
+      let title: string | null = null;
+      let dur = 2.6;
       switch (ev.kind) {
         case 'ORDER_SUBMITTED':
-          add.push({ key: k(), kind: 'label', pos: a.position, top: a.top, color, born, dur: 2.6, text: 'SUBMITTED', sub: what });
+          title = 'SUBMITTED';
           break;
         case 'ORDER_FILLED':
-          add.push({ key: k(), kind: 'label', pos: a.position, top: a.top, color, born, dur: 3.2, text: `FILLED @ ${px(ev.symbol, ev.price)}`, sub: what });
+          title = `FILLED @ ${px(ev.symbol, ev.price)}`;
+          dur = 3.2;
           break;
         case 'ORDER_REJECTED':
-          add.push({ key: k(), kind: 'label', pos: a.position, top: a.top, color, born, dur: 3.2, text: 'REJECTED', sub: what });
+          title = 'REJECTED';
+          dur = 3.2;
           break;
         case 'PROFIT_LOCKED':
         case 'POSITION_CLOSED':
-          add.push({ key: k(), kind: 'label', pos: a.position, top: a.top, color, born, dur: 4, text: ev.pnl === null ? 'CLOSED' : money(ev.pnl, { sign: true }), sub: what });
+          title = ev.pnl === null ? 'CLOSED' : money(ev.pnl, { sign: true });
+          dur = 4;
           break;
+      }
+      if (title !== null) {
+        add.push({ key: k(), kind: 'label', pos: a.position, top: a.top, color, born, dur, text: title, sub: what });
+        emitCityFx({ event: ev, anchor: a, color, title, sub: what });
       }
     }
     if (add.length) setFx((f) => [...f, ...add].slice(-40));

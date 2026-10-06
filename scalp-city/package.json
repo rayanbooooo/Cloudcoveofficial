@@ -17,7 +17,7 @@
     "build": "npm run build -w @scalp-city/web && npm run build -w @scalp-city/server",
     "start": "npm run start -w @scalp-city/server",
     "typecheck": "npm run typecheck -w @scalp-city/shared && npm run typecheck -w @scalp-city/server && npm run typecheck -w @scalp-city/web",
-    "test": "npm run test -w @scalp-city/shared && npm run test -w @scalp-city/server",
+    "test": "npm run test -w @scalp-city/shared && npm run test -w @scalp-city/server && npm run test -w @scalp-city/web",
     "migrate": "npm run migrate -w @scalp-city/server",
     "user:create": "npm run user:create -w @scalp-city/server --",
     "db:up": "docker compose up -d postgres",

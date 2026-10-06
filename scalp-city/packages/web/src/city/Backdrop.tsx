@@ -2,7 +2,7 @@ import { Grid } from '@react-three/drei';
 import { useFrame } from '@react-three/fiber';
 import { useEffect, useLayoutEffect, useMemo, useRef } from 'react';
 import * as THREE from 'three';
-import { backdrop, mulberry32, PLAZA_RADIUS, ROADS_X, ROADS_Z } from './layout';
+import { backdrop, PLAZA_CENTER, PLAZA_RADIUS, RING, ROADS_X, ROADS_Z } from './layout';
 import { createSkyMaterial, createWindowMaterial } from './materials';
 
 /** Skyline around the plaza. Decorative only: it carries no trading state. */
@@ -40,7 +40,8 @@ export function Skyline({ count, activity }: { count: number; activity: number }
 export function Ground() {
   const roadMat = useMemo(() => new THREE.MeshStandardMaterial({ color: '#0a0f17', roughness: 0.9, metalness: 0.1 }), []);
   const lineMat = useMemo(() => new THREE.MeshBasicMaterial({ color: '#1d3354', toneMapped: false }), []);
-  useEffect(() => () => (roadMat.dispose(), lineMat.dispose()), [roadMat, lineMat]);
+  const edgeMat = useMemo(() => new THREE.MeshBasicMaterial({ color: '#2a4c80', toneMapped: false }), []);
+  useEffect(() => () => (roadMat.dispose(), lineMat.dispose(), edgeMat.dispose()), [roadMat, lineMat, edgeMat]);
   return (
     <group>
       <mesh rotation={[-Math.PI / 2, 0, 0]} position={[0, -0.01, 0]}>
@@ -91,67 +92,17 @@ export function Ground() {
           <meshBasicMaterial color={i === 0 ? '#2a4c80' : '#16294a'} toneMapped={false} />
         </mesh>
       ))}
+      {/* the boulevard that circles the plaza: one lane each way, with a glowing edge and centre line */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]} position={[PLAZA_CENTER.x, 0.014, PLAZA_CENTER.z]} material={roadMat}>
+        <ringGeometry args={[RING.edgeIn, RING.edgeOut, 160]} />
+      </mesh>
+      {[RING.edgeIn, RING.edgeOut, (RING.inner + RING.outer) / 2].map((r, i) => (
+        <mesh key={r} rotation={[-Math.PI / 2, 0, 0]} position={[PLAZA_CENTER.x, 0.016, PLAZA_CENTER.z]} material={i < 2 ? edgeMat : lineMat}>
+          <ringGeometry args={[r - (i < 2 ? 0.022 : 0.016), r + (i < 2 ? 0 : 0.016), 160]} />
+        </mesh>
+      ))}
     </group>
   );
-}
-
-interface Lane {
-  axis: 'x' | 'z';
-  at: number;
-  dir: 1 | -1;
-  /** Travel range along the lane; lanes stay behind/beside the plaza so lights never sit under the UI. */
-  from: number;
-  to: number;
-}
-
-const FAR = -55;
-const NEAR_LIMIT = 8;
-
-/**
- * Traffic moves only while the regular session is open and the stock feed
- * is connected (spec §85): a still city means a closed or unfed market.
- */
-export function Traffic({ enabled, count }: { enabled: boolean; count: number }) {
-  const ref = useRef<THREE.InstancedMesh>(null);
-  const cars = useMemo(() => {
-    const rnd = mulberry32(42);
-    const lanes: Lane[] = [];
-    for (const x of ROADS_X) lanes.push({ axis: 'z', at: x - 0.5, dir: 1, from: FAR, to: NEAR_LIMIT }, { axis: 'z', at: x + 0.5, dir: -1, from: FAR, to: NEAR_LIMIT });
-    for (const z of ROADS_Z.filter((rz) => rz < 0)) lanes.push({ axis: 'x', at: z - 0.5, dir: -1, from: -55, to: 55 }, { axis: 'x', at: z + 0.5, dir: 1, from: -55, to: 55 });
-    return Array.from({ length: count }, (_, i) => ({ lane: lanes[i % lanes.length]!, offset: rnd(), speed: 4 + rnd() * 5 }));
-  }, [count]);
-  const geometry = useMemo(() => new THREE.BoxGeometry(0.3, 0.05, 0.1), []);
-  const material = useMemo(() => new THREE.MeshBasicMaterial({ toneMapped: false }), []);
-  useEffect(() => () => (geometry.dispose(), material.dispose()), [geometry, material]);
-  useLayoutEffect(() => {
-    const mesh = ref.current;
-    if (!mesh) return;
-    const head = new THREE.Color('#fff1d6').multiplyScalar(1.6);
-    const tail = new THREE.Color('#ff3348').multiplyScalar(1.4);
-    cars.forEach((c, i) => mesh.setColorAt(i, c.lane.dir === 1 ? head : tail));
-    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-  }, [cars]);
-  const tmp = useMemo(() => new THREE.Object3D(), []);
-  useFrame(({ clock }) => {
-    const mesh = ref.current;
-    if (!mesh || !enabled) return;
-    const t = clock.elapsedTime;
-    cars.forEach((c, i) => {
-      const span = c.lane.to - c.lane.from;
-      const along = c.lane.from + ((((c.offset * span + t * c.speed * c.lane.dir) % span) + span) % span);
-      if (c.lane.axis === 'z') {
-        tmp.position.set(c.lane.at, 0.05, along);
-        tmp.rotation.set(0, Math.PI / 2, 0);
-      } else {
-        tmp.position.set(along, 0.05, c.lane.at);
-        tmp.rotation.set(0, 0, 0);
-      }
-      tmp.updateMatrix();
-      mesh.setMatrixAt(i, tmp.matrix);
-    });
-    mesh.instanceMatrix.needsUpdate = true;
-  });
-  return <instancedMesh ref={ref} args={[geometry, material, count]} visible={enabled} frustumCulled={false} />;
 }
 
 /** Sky dome. The horizon turns red while the kill switch is engaged. */

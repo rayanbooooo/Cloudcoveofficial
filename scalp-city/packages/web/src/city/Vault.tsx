@@ -5,6 +5,7 @@ import * as THREE from 'three';
 import { cx } from '../components/ui';
 import { envLabel, money, pct, pnlClass } from '../lib/format';
 import { useStore } from '../store/store';
+import { onCityFx } from './cityBus';
 import { useLabelLayer } from './labelLayer';
 import { VAULT_POSITION } from './layout';
 import { STATE_COLORS } from './materials';
@@ -47,6 +48,16 @@ export function Vault({ activity }: { activity: number }) {
   const emblem = useRef<THREE.Mesh>(null);
   const halo = useRef<THREE.Mesh>(null);
   const goal = useMemo(() => new THREE.Color(), []);
+  // A burst of coins reaching the vault makes the emblem flare as they land (they take about a second).
+  const landings = useRef<number[]>([]);
+  const flare = useRef(0);
+  useEffect(
+    () =>
+      onCityFx((fx) => {
+        if (fx.event.kind === 'PROFIT_LOCKED') landings.current.push(performance.now() + 900);
+      }),
+    [],
+  );
 
   useFrame(({ clock }, dt) => {
     const t = clock.elapsedTime;
@@ -59,7 +70,15 @@ export function Vault({ activity }: { activity: number }) {
     const envColor = env === 'live' ? LIVE : PAPER;
     mats.emblem.emissive.lerp(envColor, k);
     mats.halo.color.lerp(envColor, k);
+    const nowMs = performance.now();
+    while (landings.current.length && landings.current[0]! <= nowMs) {
+      landings.current.shift();
+      flare.current = 1;
+    }
+    flare.current = Math.max(0, flare.current - dt * 1.4);
+    mats.emblem.emissiveIntensity = 1.8 + flare.current * 4;
     if (emblem.current) {
+      emblem.current.scale.setScalar(1 + flare.current * 0.35);
       emblem.current.rotation.y = t * 0.5;
       emblem.current.position.y = 3.25 + Math.sin(t * 0.9) * 0.08;
     }

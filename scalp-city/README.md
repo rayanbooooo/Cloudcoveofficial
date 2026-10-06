@@ -237,9 +237,24 @@ Each tower is a worker and every visual maps to real state:
   produced an order is marked *SIGNAL USED* and gets no beam.
 - **Robots** watch, analyze, type while trading, celebrate profits, and slump when halted.
 - **The vault** shows broker-reported equity and day P&L. Its emblem is blue for PAPER and red for LIVE.
-- **Traffic** moves only while the market is open and the stock feed is connected.
+- **Traffic** is a small simulation: cars, taxis, vans, buses and trucks follow each other, stop at red
+  lights and circle the plaza on a boulevard. It runs at full pace while the market is open and the feed
+  is live, slows to night traffic when the market is closed, and stands still with hazard lights on when
+  market data is missing or the kill switch is engaged (the signals flash amber or red). It is scenery:
+  the cars are not trades.
 - **Event effects** (pulses, fill labels, P&L) fire only from server events emitted after the broker
-  confirms. Events older than 8 seconds are not replayed.
+  confirms. Events older than 8 seconds are not replayed. The same events send **event vehicles** around
+  the boulevard: a courier van for a fill, an armored truck (and coins arcing from the tower to the vault)
+  for a profit, a tow truck for a loss, a police car for a rejected order. Each carries a label with the
+  real figures, and at most three are out at once, so a busy minute does not jam the road.
+- **Above the city**, drones patrol with searchlights and a blimp sails round with a ticker on each side.
+  The ticker shows the live quotes of the symbols the workers trade (greyed and marked when the feed is
+  down) or the account's day, and nothing it shows is invented.
+
+**Ride along.** Click any car, bus, drone or the blimp (or use the RIDE buttons at the top of the city)
+and the camera follows it. Drag to look around it, scroll to zoom, and press Esc to go back. The TRAFFIC
+and SKY switches turn the moving scenery off (remembered in this browser). A system set to reduce motion
+gets a still city.
 
 **Click a tower** to open the worker's **desk**: a close-up of its robot at three monitors, with the real
 1-minute bars and VWAP (entry, stop and target drawn on the chart), the worker's signal and charge, and
@@ -256,7 +271,7 @@ live in the panels anyway.
 ## Tests
 
 ```bash
-npm test         # 224 tests (31 shared + 193 server), ~45 s, no network, no database server needed
+npm test         # 239 tests (32 shared + 198 server + 9 web), about a minute, no network, no database server needed
 TEST_DATABASE_URL=postgres://… npm test   # also runs the 2 single-instance-lock tests against a real PostgreSQL
 npm run typecheck
 ```

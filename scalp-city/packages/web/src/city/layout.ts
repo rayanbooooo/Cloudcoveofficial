@@ -5,6 +5,10 @@ export type Vec3 = [number, number, number];
 /** The vault sits at the front of the plaza; the worker towers stand in an arc behind it. */
 export const VAULT_POSITION: Vec3 = [0, 0, 4.8];
 export const PLAZA_RADIUS = 11;
+/** Centre of the plaza disc (the towers and the vault stand inside it). */
+export const PLAZA_CENTER = { x: 0, z: 1 } as const;
+/** The boulevard that circles the plaza just inside its rim: two lanes, one each way. */
+export const RING = { inner: 9.6, outer: 10.25, edgeIn: 9.15, edgeOut: 10.6 } as const;
 
 /** Towers stand on an arc facing the default camera. */
 export function towerPositions(count: number): Vec3[] {
