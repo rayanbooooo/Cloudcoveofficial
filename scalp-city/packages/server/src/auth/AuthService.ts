@@ -151,7 +151,8 @@ export class AuthService {
       meta.userAgent?.slice(0, 300) ?? null,
     ]);
     await this.db.query('UPDATE users SET last_login_at = now() WHERE id = $1', [user.id]);
-    await this.db.query('DELETE FROM sessions WHERE expires_at < now()');
+    // Expired by the app's clock, which is the clock expiry was set with (the database's own now() differs under a test or demo clock).
+    await this.db.query('DELETE FROM sessions WHERE expires_at < $1', [iso(this.clock.now())]);
     return { token, session: { sessionId, userId: user.id, username: user.username, csrfToken, expiresAt } };
   }
 
