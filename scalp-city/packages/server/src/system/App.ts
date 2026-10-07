@@ -76,6 +76,8 @@ export class App {
       },
     });
     this.ctx = this.createContext(this.config.tradingEnvironment);
+    // "Today" is the trading day: with overnight trading it does not turn over at midnight in the middle of the night.
+    this.views.dayStart = () => this.ctx.calendar?.tradingDayStart(this.clock.now());
     await this.ctx.start();
     await this.views.refresh(this.ctx.env);
     this.timers.push(setInterval(() => void this.views.refresh(this.ctx.env), 10_000));

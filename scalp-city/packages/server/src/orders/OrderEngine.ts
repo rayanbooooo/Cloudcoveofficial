@@ -26,6 +26,7 @@ import { nyDate } from '../market/MarketCalendar.js';
 import type { FillEffect, PositionLedger } from '../positions/PositionLedger.js';
 import { evaluateRisk, isOpening, type ProposedOrder, type RiskState } from '../risk/RiskEngine.js';
 import type { Alerts, Timeline } from '../system/Timeline.js';
+import { marketableLimit, mayBecomeMarketableLimit } from './offHours.js';
 import { OrderRepository, rowToOrder, UniqueViolation } from './OrderRepository.js';
 import { fillDeltaPrice, isTerminal, nextState } from './stateMachine.js';
 import type { OrderRecord, OrderRequest } from './types.js';
@@ -41,6 +42,19 @@ export interface RiskContextProvider {
 export interface BreakerSignals {
   brokerRejected(reason: string): void;
   apiError(reason: string): void;
+}
+
+/**
+ * Trading outside the regular session (Alpaca extended hours and overnight): the broker then takes limit orders
+ * only, flagged as extended-hours. Absent, orders are sent as they are asked for.
+ */
+export interface OffHoursDeps {
+  /** True while the deployment trades but the regular session is not open. */
+  active: (now: number) => boolean;
+  /** Latest bid and ask, to price a limit that has to behave like a market order. */
+  quote: (symbol: string) => { bid: number; ask: number } | null;
+  /** How far past the touch such a limit is priced, in percent. */
+  bufferPct: number;
 }
 
 export interface OrderEngineDeps {
@@ -65,6 +79,9 @@ export interface OrderEngineDeps {
   currency?: () => string | null;
   /** Delays between attempts to resolve an order whose submission outcome is unknown. */
   resolutionDelaysMs?: number[];
+  offHours?: OffHoursDeps;
+  /** The trading day an instant belongs to (a date key). Default: the New York date. */
+  tradingDay?: (t: number) => string;
 }
 
 /** Client order id suffix of the broker-side stop that protects an entry. */
@@ -87,6 +104,12 @@ export function validateOrder(o: OrderRecord): string | null {
   if (o.assetClass === 'us_option' && o.timeInForce !== 'day') return 'options orders must be DAY orders';
   if (cfd && !CFD_TIF[o.type]?.includes(o.timeInForce)) return `${o.type} CFD orders cannot be ${o.timeInForce.toUpperCase()}`;
   if (cfd && !o.positionIntent) return 'CFD orders must state whether they open or close a position';
+  if (o.meta.extendedHours) {
+    // Outside 09:30–16:00 New York: no options, and shares only as day/GTC limit orders.
+    if (o.assetClass === 'us_option') return 'options trade only in the regular session (09:30–16:00 New York)';
+    if (o.type !== 'limit') return `${o.type} orders are only accepted in the regular session (09:30–16:00 New York); at this hour use a limit order`;
+    if (o.timeInForce !== 'day' && o.timeInForce !== 'gtc') return `extended-hours orders must be DAY or GTC, not ${o.timeInForce.toUpperCase()}`;
+  }
   if ((o.type === 'limit' || o.type === 'stop_limit') && !(o.limitPrice !== null && o.limitPrice > 0)) return 'limit price required';
   if ((o.type === 'stop' || o.type === 'stop_limit') && !(o.stopPrice !== null && o.stopPrice > 0)) return 'stop price required';
   if (o.type === 'market' && (o.limitPrice !== null || o.stopPrice !== null)) return 'market orders take no prices';
@@ -212,12 +235,13 @@ export class OrderEngine {
    * plus those still working — what "trades per day" limits count.
    */
   entriesToday(workerId?: string | null): number {
-    const today = nyDate(this.d.clock.now());
+    const dayOf = this.d.tradingDay ?? nyDate;
+    const today = dayOf(this.d.clock.now());
     let count = 0;
     for (const o of this.orders.values()) {
       if (!isOpening(o.purpose)) continue;
       if (workerId !== undefined && o.workerId !== workerId) continue;
-      if (nyDate(o.createdAt) !== today) continue;
+      if (dayOf(o.createdAt) !== today) continue;
       if (o.filledQty > 0 || LIVE_ORDER_STATES.has(o.state)) count++;
     }
     return count;
@@ -269,6 +293,23 @@ export class OrderEngine {
   }
 
   // ── Submission ──────────────────────────────────────────────────────────
+
+  /**
+   * Outside the regular session the order is flagged as extended-hours, and a closing order that would have been a
+   * market order is priced as a limit through the touch (the broker takes no market orders then). Opening orders
+   * are never changed: a market order to open a position at this hour is refused by validation instead.
+   */
+  private forSession<T extends OrderRequest>(req: T): T {
+    const off = this.d.offHours;
+    if (!off || req.assetClass === 'cfd' || !off.active(this.d.clock.now())) return req;
+    let next: T = { ...req, meta: { ...req.meta, extendedHours: true } };
+    if (req.assetClass === 'us_equity' && req.type === 'market' && mayBecomeMarketableLimit(req.purpose)) {
+      const q = off.quote(req.symbol);
+      const px = q ? marketableLimit(req.side, q, off.bufferPct) : null;
+      if (px !== null) next = { ...next, type: 'limit', limitPrice: px, stopPrice: null, timeInForce: 'day', meta: { ...next.meta, convertedFromMarket: { bufferPct: off.bufferPct } } };
+    }
+    return next;
+  }
 
   private draft(req: OrderRequest): OrderRecord {
     const now = this.d.clock.now();
@@ -336,7 +377,8 @@ export class OrderEngine {
    * Submit an order. Always returns the order record (inspect `.state`);
    * never throws for business outcomes like risk or broker rejections.
    */
-  async submit(req: OrderRequest & { signalBarCloseAt?: number | null; referencePrice?: number | null }): Promise<OrderRecord> {
+  async submit(requested: OrderRequest & { signalBarCloseAt?: number | null; referencePrice?: number | null }): Promise<OrderRecord> {
+    const req = this.forSession(requested);
     const order = this.draft(req);
     const log = this.d.logger.child({ worker: order.workerId ?? undefined, symbol: order.symbol, clientOrderId: order.clientOrderId });
 
@@ -412,6 +454,7 @@ export class OrderEngine {
         stopPrice: order.stopPrice,
         positionIntent: order.positionIntent,
         protectiveStop: order.meta.protectiveStop ? { price: order.meta.protectiveStop.price, clientOrderId: `${order.clientOrderId}${PROTECTIVE_SUFFIX}` } : null,
+        extendedHours: order.meta.extendedHours === true,
       });
       await this.applyBroker(order, bo, { event: 'submit_response', eventKey: `submit:${order.id}`, at: this.d.clock.now(), update: null });
       void this.d.audit.record({
@@ -429,7 +472,7 @@ export class OrderEngine {
         workerId: order.workerId,
         symbol: order.symbol,
         title: `Order submitted · ${order.side.toUpperCase()} ${formatQty(order.qty)} ${order.symbol}`,
-        detail: `${order.type}${order.limitPrice ? ` @ ${order.limitPrice}` : ''}${order.meta.protectiveStop ? ` · broker stop ${order.meta.protectiveStop.price}` : ''} · ${bo.status}`,
+        detail: `${order.type}${order.limitPrice ? ` @ ${order.limitPrice}` : ''}${order.meta.protectiveStop ? ` · broker stop ${order.meta.protectiveStop.price}` : ''}${order.meta.extendedHours ? ' · extended hours' : ''}${order.meta.convertedFromMarket ? ` · limit ${order.meta.convertedFromMarket.bufferPct}% through the touch` : ''} · ${bo.status}`,
       });
       this.city('ORDER_SUBMITTED', order, null, null);
     } catch (err) {

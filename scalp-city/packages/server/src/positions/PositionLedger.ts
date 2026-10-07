@@ -85,6 +85,8 @@ export class PositionLedger {
     private readonly db: Db,
     private readonly clock: Clock,
     private readonly logger: Logger,
+    /** The trading day an instant belongs to (a date key). Default: the New York date. */
+    private readonly tradingDay: (t: number) => string = nyDate,
   ) {}
 
   async load(): Promise<void> {
@@ -182,7 +184,7 @@ export class PositionLedger {
         exitReason: null,
         dailyPnlBefore: order.meta.dailyPnlBefore ?? ctx.dailyPnl,
         dailyPnlAfter: null,
-        tradingDay: nyDate(at),
+        tradingDay: this.tradingDay(at),
         openedAt: at,
         closedAt: null,
       };

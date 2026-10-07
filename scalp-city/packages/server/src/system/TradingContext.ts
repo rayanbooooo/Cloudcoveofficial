@@ -12,7 +12,7 @@ import type { EventBus } from '../core/eventBus.js';
 import type { Logger } from '../core/logger.js';
 import type { Db } from '../db/db.js';
 import { InstrumentCatalog } from '../market/InstrumentCatalog.js';
-import { MarketCalendar } from '../market/MarketCalendar.js';
+import { MarketCalendar, nyDate } from '../market/MarketCalendar.js';
 import { AlpacaMarketDataProvider } from '../marketdata/alpaca/AlpacaMarketDataProvider.js';
 import { MarketDataService } from '../marketdata/MarketDataService.js';
 import { OandaMarketDataProvider } from '../marketdata/oanda/OandaMarketDataProvider.js';
@@ -93,7 +93,8 @@ export class TradingContext {
     this.timeline = new Timeline(this.venue, o.env, o.db, o.bus, o.clock, o.logger.child({ component: 'timeline' }));
     this.alerts = new Alerts(o.bus, o.clock);
     this.riskSettings = new RiskSettings(o.settings, o.config.riskDefaults, this.venue);
-    this.breakers = new CircuitBreakers(o.env, o.settings, o.bus, o.audit, this.alerts, this.timeline, o.clock, o.logger.child({ component: 'breakers' }), this.venue);
+    // The calendar is built further down; the breakers only ask which trading day it is after construction.
+    this.breakers = new CircuitBreakers(o.env, o.settings, o.bus, o.audit, this.alerts, this.timeline, o.clock, o.logger.child({ component: 'breakers' }), this.venue, (t) => (this.calendar ? this.calendar.tradingDay(t) : nyDate(t)));
     this.controls = new Controls(o.env, o.settings, o.bus, o.audit, this.timeline, this.alerts, o.clock, o.logger.child({ component: 'controls' }));
     this.liveGate = new LiveGate(o.env, o.config.liveTradingEnabled, o.audit, this.timeline, o.bus, o.clock, o.logger.child({ component: 'live-gate' }));
     if (!this.configured) return;
@@ -142,26 +143,29 @@ export class TradingContext {
           dataUrl: o.config.endpoints.data,
           dataStreamUrl: o.config.endpoints.dataStream,
           stockFeed: o.config.stockFeed,
+          overnightFeed: o.config.sessions === 'all' ? o.config.overnightFeed : null,
           optionsFeed: o.config.optionsFeed,
           credentials: creds,
           logger: log,
+          clock: o.clock,
         });
     }
-    this.calendar = new MarketCalendar(this.broker, o.db, o.clock, log.child({ component: 'calendar' }), o.config.thresholds.maxClockSkewMs);
+    this.calendar = new MarketCalendar(this.broker, o.db, o.clock, log.child({ component: 'calendar' }), o.config.thresholds.maxClockSkewMs, o.config.sessions);
     this.instruments = new InstrumentCatalog(this.broker, o.clock, log.child({ component: 'instruments' }));
     this.marketData = new MarketDataService(this.provider, this.calendar, o.bus, o.clock, log.child({ component: 'market-data' }), {
       env: o.env,
       symbols: o.config.symbols,
       maxDataAgeMs: o.config.thresholds.maxDataAgeMs,
+      offHoursMaxDataAgeMs: o.config.thresholds.offHoursMaxDataAgeMs,
       maxOptionQuoteAgeMs: o.config.thresholds.maxOptionQuoteAgeMs,
       paperAllowIndicativeOptions: o.config.paperAllowIndicativeOptions,
       // OANDA's official minute candle is fetched just after the minute; give it time to land.
       barGraceMs: this.venue === 'oanda' ? 9000 : undefined,
     });
     this.account = new AccountService(this.broker, o.db, o.bus, o.clock, log.child({ component: 'account' }), { env: o.env });
-    this.ledger = new PositionLedger(this.venue, o.env, o.db, o.clock, log.child({ component: 'ledger' }));
+    this.ledger = new PositionLedger(this.venue, o.env, o.db, o.clock, log.child({ component: 'ledger' }), this.calendar.tradingDay);
     this.selector = new ContractSelector(this.broker, this.provider, o.clock, log.child({ component: 'options' }));
-    this.stats = new WorkerStatsService(this.venue, o.env, o.db, o.clock);
+    this.stats = new WorkerStatsService(this.venue, o.env, o.db, o.clock, { key: this.calendar.tradingDay, start: this.calendar.tradingDayStart });
     this.signals = new SignalRepository(this.venue, o.env, o.db);
 
     let engine: OrderEngine | null = null;
@@ -206,6 +210,22 @@ export class TradingContext {
       dailyPnl: () => this.account.dayPnl(),
       onFills: () => this.account.requestRefresh(),
       currency: () => this.account.account?.currency ?? null,
+      tradingDay: this.calendar.tradingDay,
+      // Only Alpaca has extended-hours rules (limit orders, flagged). OANDA instruments trade around the clock.
+      offHours:
+        this.venue === 'alpaca' && o.config.sessions !== 'regular'
+          ? {
+              active: (now) => !this.calendar.isRegularOpen(now),
+              // The latest two-sided quote, else the last trade: only used to price an exit's limit through the touch.
+              quote: (symbol) => {
+                const q = this.marketData.state(symbol);
+                if (!q) return null;
+                if (q.bid !== null && q.ask !== null) return { bid: q.bid, ask: q.ask };
+                return q.last !== null ? { bid: q.last, ask: q.last } : null;
+              },
+              bufferPct: o.config.offHoursExitBufferPct,
+            }
+          : undefined,
     });
     this.orders = engine;
     this.reconciler = new Reconciler(o.env, this.account, this.ledger, this.orders, this.breakers, o.audit, this.timeline, this.alerts, o.bus, o.clock, log.child({ component: 'reconciler' }), () =>
@@ -257,7 +277,7 @@ export class TradingContext {
     await this.riskSettings.load();
     await this.controls.load();
     await this.breakers.load();
-    await this.timeline.load(DateTime.fromMillis(this.o.clock.now(), { zone: 'America/New_York' }).startOf('day').toMillis());
+    await this.timeline.load(this.calendar ? this.calendar.tradingDayStart(this.o.clock.now()) : DateTime.fromMillis(this.o.clock.now(), { zone: 'America/New_York' }).startOf('day').toMillis());
     if (!this.configured) {
       const what =
         this.venue === 'oanda'

@@ -59,6 +59,8 @@ export class CircuitBreakers {
     private readonly clock: Clock,
     private readonly logger: Logger,
     private readonly venue: Venue = 'alpaca',
+    /** The trading day an instant belongs to (a date key). Default: the New York date. */
+    private readonly tradingDay: (t: number) => string = nyDate,
   ) {}
 
   /** Breakers belong to one broker account: Alpaca keeps the original key, other venues their own. */
@@ -68,7 +70,7 @@ export class CircuitBreakers {
 
   async load(): Promise<void> {
     const stored = await this.settings.get<Record<string, Latched>>(this.key(), {});
-    const today = nyDate(this.clock.now());
+    const today = this.tradingDay(this.clock.now());
     for (const [id, v] of Object.entries(stored)) {
       if (!(id in BREAKERS)) continue;
       if (id === 'DAILY_LOSS' && v.day !== today) continue; // a new trading day
@@ -88,7 +90,7 @@ export class CircuitBreakers {
   async trip(id: BreakerId, detail: string): Promise<void> {
     if (this.latched.has(id)) return;
     const now = this.clock.now();
-    this.latched.set(id, { trippedAt: now, detail, day: nyDate(now) });
+    this.latched.set(id, { trippedAt: now, detail, day: this.tradingDay(now) });
     await this.persist();
     this.logger.error({ breaker: id, detail }, 'CIRCUIT BREAKER TRIPPED');
     void this.audit.record({ action: 'BREAKER_TRIPPED', actor: 'system', env: this.env, details: { breaker: id, detail } });

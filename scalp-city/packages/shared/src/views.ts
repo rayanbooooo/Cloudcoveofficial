@@ -14,6 +14,7 @@ import type {
   OrderType,
   PositionIntent,
   RejectedBy,
+  SessionPolicy,
   Severity,
   SignalPhase,
   StockFeed,
@@ -417,13 +418,18 @@ export interface MarketDataStatusView {
   /** 'mid': prices are the midpoint of the broker's bid/ask (no exchange trades exist for OTC FX/CFDs). */
   priceBasis: 'trades' | 'mid';
   maxDataAgeMs: number;
+  /** How old a quote may be outside the regular session, where trading is thinner. */
+  offHoursMaxDataAgeMs: number;
   symbols: Record<string, { lastEventAt: number | null; ageMs: number | null; stale: boolean }>;
 }
 
 export interface MarketStatusView {
+  /** Workers may trade right now: inside a session the deployment trades (see `sessions`). */
   isOpen: boolean;
-  /** OPEN | CLOSED | PRE_MARKET | AFTER_HOURS | HOLIDAY | UNKNOWN */
-  label: 'OPEN' | 'CLOSED' | 'PRE_MARKET' | 'AFTER_HOURS' | 'HOLIDAY' | 'UNKNOWN';
+  /** OPEN | CLOSED | PRE_MARKET | AFTER_HOURS | OVERNIGHT | HOLIDAY | UNKNOWN */
+  label: 'OPEN' | 'CLOSED' | 'PRE_MARKET' | 'AFTER_HOURS' | 'OVERNIGHT' | 'HOLIDAY' | 'UNKNOWN';
+  /** Which sessions this deployment trades. */
+  sessions: SessionPolicy;
   sessionOpen: number | null;
   sessionClose: number | null;
   nextOpen: number | null;

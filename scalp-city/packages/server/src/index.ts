@@ -78,6 +78,7 @@ async function main(): Promise<void> {
     `  live lock        LIVE_TRADING_ENABLED=${config.liveTradingEnabled}`,
     `  credentials      paper: ${config.credentials.paper ? 'set' : '—'}   live: ${config.credentials.live ? 'set' : '—'}`,
     `  data feeds       stocks: ${config.stockFeed}   options: ${config.optionsFeed}`,
+    config.venue === 'alpaca' ? `  sessions         ${config.sessions}${config.sessions === 'all' ? `   (overnight feed: ${config.overnightFeed})` : ''}` : null,
     config.nonStandardEndpoints.length ? `  ⚠ NON-STANDARD ENDPOINTS: ${config.nonStandardEndpoints.join(', ')}` : null,
     `  listening        http://${config.host}:${config.port}`,
     '',

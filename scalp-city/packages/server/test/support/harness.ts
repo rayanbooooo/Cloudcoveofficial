@@ -4,7 +4,7 @@ import { EventBus } from '../../src/core/eventBus.js';
 import { createTestLogger } from '../../src/core/logger.js';
 import type { Db } from '../../src/db/db.js';
 import { migrate } from '../../src/db/migrations.js';
-import { OrderEngine, type RiskContextProvider } from '../../src/orders/OrderEngine.js';
+import { OrderEngine, type OffHoursDeps, type RiskContextProvider } from '../../src/orders/OrderEngine.js';
 import type { OrderRequest } from '../../src/orders/types.js';
 import { PositionLedger } from '../../src/positions/PositionLedger.js';
 import type { ProposedOrder, RiskState } from '../../src/risk/RiskEngine.js';
@@ -27,7 +27,7 @@ export interface EngineHarness {
   riskOverrides: Partial<RiskState>;
 }
 
-export async function createEngineHarness(): Promise<EngineHarness> {
+export async function createEngineHarness(opts: { offHours?: OffHoursDeps; tradingDay?: (t: number) => string } = {}): Promise<EngineHarness> {
   const db = await createPgliteDb();
   await migrate(db);
   await new WorkerRepository(db).seed();
@@ -36,7 +36,7 @@ export async function createEngineHarness(): Promise<EngineHarness> {
   const bus = new EventBus(logger);
   const broker = new MockBroker();
   broker.now = () => clock.now();
-  const ledger = new PositionLedger('alpaca', 'paper', db, clock, logger);
+  const ledger = new PositionLedger('alpaca', 'paper', db, clock, logger, opts.tradingDay);
   const audit = new AuditLog(db, logger, clock);
   const timeline = new Timeline('alpaca', 'paper', db, bus, clock, logger);
   const alerts = new Alerts(bus, clock);
@@ -78,6 +78,8 @@ export async function createEngineHarness(): Promise<EngineHarness> {
     dailyPnl: () => 0,
     onFills: () => undefined,
     resolutionDelaysMs: [5, 5, 5],
+    offHours: opts.offHours,
+    tradingDay: opts.tradingDay,
   });
   return h;
 }

@@ -138,6 +138,8 @@ export class AlpacaBrokerAdapter implements BrokerAdapter {
     if (p.limitPrice !== undefined && p.limitPrice !== null) body.limit_price = priceStr(p.limitPrice, isOption);
     if (p.stopPrice !== undefined && p.stopPrice !== null) body.stop_price = priceStr(p.stopPrice, isOption);
     if (p.positionIntent) body.position_intent = p.positionIntent;
+    // Outside 09:30–16:00 Alpaca accepts only limit orders carrying this flag (the order engine has made sure of it).
+    if (p.extendedHours) body.extended_hours = true;
     return mapOrder(await this.http.post('/v2/orders', body, { timeoutMs: 10_000 }));
   }
 

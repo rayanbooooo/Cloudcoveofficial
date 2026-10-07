@@ -45,12 +45,14 @@ export class WorkerStatsService {
     private readonly env: TradingEnvironment,
     private readonly db: Db,
     private readonly clock: Clock,
+    /** What "today" is: the trading day's key and its start. Default: the New York date and its midnight. */
+    private readonly day?: { key: (t: number) => string; start: (t: number) => number },
   ) {}
 
   async refresh(): Promise<void> {
     const now = this.clock.now();
-    const today = nyDate(now);
-    const midnight = DateTime.fromMillis(now, { zone: 'America/New_York' }).startOf('day').toMillis();
+    const today = this.day ? this.day.key(now) : nyDate(now);
+    const midnight = this.day ? this.day.start(now) : DateTime.fromMillis(now, { zone: 'America/New_York' }).startOf('day').toMillis();
     const next = new Map<string, BaseStats>();
     const get = (w: string) => {
       let s = next.get(w);

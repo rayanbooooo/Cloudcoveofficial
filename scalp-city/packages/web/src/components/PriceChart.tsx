@@ -16,9 +16,10 @@ import {
   type UTCTimestamp,
 } from 'lightweight-charts';
 import { useEffect, useRef, useState } from 'react';
-import { aggregateBars, atr, ema, instrumentName, priceDecimals, timeframeMinutes, vwapSeries, type Bar, type Timeframe } from '@scalp-city/shared';
+import { aggregateBars, atr, ema, instrumentName, priceDecimals, timeframeMinutes, vwapSeries, type Bar, type SessionPolicy, type Timeframe } from '@scalp-city/shared';
 import { Api } from '../lib/api';
 import { hmET, px } from '../lib/format';
+import { barInTradedWindow } from '../lib/sessions';
 import { onBars, useStore } from '../store/store';
 import { cx } from './ui';
 
@@ -37,7 +38,13 @@ export interface ChartLevel {
 }
 
 const etDay = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/New_York', year: 'numeric', month: '2-digit', day: '2-digit' });
-const sessionKey = (t: number) => etDay.format(t);
+/** The trading day VWAP restarts on: the New York date; with overnight trading the day runs 04:00 to 04:00 (as in the engine). */
+const etHour = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: 'numeric', hourCycle: 'h23' });
+const dayKey =
+  (sessions: SessionPolicy) =>
+  (t: number): string =>
+    // Before 04:00 it is still the day before (twelve hours back is always on the previous date, whatever the clocks did).
+    etDay.format(sessions === 'all' && Number(etHour.format(t)) < 4 ? t - 12 * 3_600_000 : t);
 const toTime = (t: number) => Math.floor(t / 1000) as UTCTimestamp;
 
 /**
@@ -70,6 +77,7 @@ export function PriceChart({
   const [meta, setMeta] = useState<{ source: string; feed: string; error: string | null; atr: number | null }>({ source: '', feed: '', error: null, atr: null });
   const sessionOpen = useStore((s) => s.system?.market.sessionOpen ?? null);
   const sessionClose = useStore((s) => s.system?.market.sessionClose ?? null);
+  const sessions = useStore((s) => s.system?.market.sessions ?? 'regular');
 
   useEffect(() => {
     const el = ref.current;
@@ -108,7 +116,7 @@ export function PriceChart({
       const bars = tf === '1Min' ? oneMin : aggregateBars(oneMin, tf, Date.now());
       if (!bars.length) return;
       const closes = bars.map((b) => b.c);
-      const vw = vwapSeries(bars, sessionKey);
+      const vw = vwapSeries(bars, dayKey(sessions));
       const em = ema(closes, 50);
       const at = atr(bars, 14);
       const candle = (b: Bar) => ({ time: toTime(b.t), open: b.o, high: b.h, low: b.l, close: b.c });
@@ -140,12 +148,12 @@ export function PriceChart({
       })
       .catch((e: Error) => !disposed && setMeta((m) => ({ ...m, error: e.message })));
 
-    // Live updates (only for today's chart, regular session only).
+    // Live updates (only for today's chart, and only the hours its history covers).
     const off = date
       ? () => undefined
       : onBars(symbol, (updates) => {
           for (const b of updates) {
-            if (sessionOpen !== null && (b.t < sessionOpen || (sessionClose !== null && b.t >= sessionClose))) continue;
+            if (!barInTradedWindow({ sessions, sessionOpen, sessionClose }, b.t)) continue;
             const idx = oneMin.findIndex((x) => x.t === b.t);
             if (idx >= 0) oneMin[idx] = b;
             else if (!oneMin.length || b.t > oneMin[oneMin.length - 1]!.t) oneMin.push(b);
@@ -168,7 +176,7 @@ export function PriceChart({
       chart.remove();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [symbol, tf, date, sessionOpen, sessionClose]);
+  }, [symbol, tf, date, sessionOpen, sessionClose, sessions]);
 
   // Entry / stop / target lines follow the position without rebuilding the chart.
   const levelKey = levels.map((l) => `${l.title}:${l.price}:${l.color}`).join('|');

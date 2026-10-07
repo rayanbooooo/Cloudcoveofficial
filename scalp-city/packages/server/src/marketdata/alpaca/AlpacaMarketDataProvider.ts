@@ -2,6 +2,7 @@ import type { Bar, OptionsFeed, StockFeed } from '@scalp-city/shared';
 import { AlpacaHttp, num } from '../../broker/alpaca/AlpacaHttp.js';
 import type { StreamStatus, Unsubscribe } from '../../broker/types.js';
 import type { Credentials } from '../../config/env.js';
+import { systemClock, type Clock } from '../../core/clock.js';
 import type { Logger } from '../../core/logger.js';
 import type {
   DataStreamName,
@@ -12,14 +13,21 @@ import type {
   StockSnapshot,
 } from '../types.js';
 import { AlpacaDataStream, streamTime, type RawDataMessage } from './AlpacaDataStream.js';
+import { feedAt, feedSegments, streamPath, type FeedPlan } from './feedPlan.js';
 
 export interface AlpacaMarketDataOptions {
   dataUrl: string;
   dataStreamUrl: string;
   stockFeed: StockFeed;
+  /**
+   * The feed that carries 20:00–04:00 New York, when the deployment trades overnight: it has its own WebSocket and
+   * its own history. Null/absent: the primary feed is used around the clock (and is simply silent overnight).
+   */
+  overnightFeed?: 'overnight' | 'boats' | null;
   optionsFeed: OptionsFeed;
   credentials: Credentials;
   logger: Logger;
+  clock?: Clock;
   fetchImpl?: typeof fetch;
 }
 
@@ -61,18 +69,26 @@ function optionSnapshot(symbol: string, r: Raw): OptionSnapshot {
 
 export class AlpacaMarketDataProvider implements MarketDataProvider {
   readonly name = 'alpaca';
-  readonly stockFeed: StockFeed;
   readonly optionsFeed: OptionsFeed;
   private readonly http: AlpacaHttp;
+  private readonly clock: Clock;
+  private readonly plan: FeedPlan;
+  /** The daytime stock stream (IEX or SIP). */
   private readonly stockStream: AlpacaDataStream;
+  /** The overnight stream; only present when the deployment trades overnight. Both stay connected: no switching churn. */
+  private readonly overnightStream: AlpacaDataStream | null;
   private readonly optionStream: AlpacaDataStream;
   private handlers = new Set<(e: ProviderEvent) => void>();
   private statusHandlers = new Set<(s: DataStreamName, st: StreamStatus) => void>();
   private started = false;
+  private feedTimer: NodeJS.Timeout | null = null;
+  private lastActive: StockFeed;
 
   constructor(private readonly opts: AlpacaMarketDataOptions) {
-    this.stockFeed = opts.stockFeed;
     this.optionsFeed = opts.optionsFeed;
+    this.clock = opts.clock ?? systemClock;
+    this.plan = { primary: opts.stockFeed, overnight: opts.overnightFeed ?? null };
+    this.lastActive = feedAt(this.plan, this.clock.now());
     this.http = new AlpacaHttp({
       baseUrl: opts.dataUrl,
       credentials: opts.credentials,
@@ -80,13 +96,24 @@ export class AlpacaMarketDataProvider implements MarketDataProvider {
       requestsPerMinute: 180,
       fetchImpl: opts.fetchImpl,
     });
+    const stockChannels = ['trades', 'quotes', 'bars', 'updatedBars'] as const;
     this.stockStream = new AlpacaDataStream(
       'alpaca-stock-data',
-      `${opts.dataStreamUrl}/v2/${opts.stockFeed}`,
+      `${opts.dataStreamUrl}${streamPath(opts.stockFeed)}`,
       opts.credentials,
-      ['trades', 'quotes', 'bars', 'updatedBars'],
+      stockChannels,
       opts.logger.child({ component: 'alpaca-stock-stream' }),
     );
+    this.overnightStream = opts.overnightFeed
+      ? new AlpacaDataStream(
+          'alpaca-overnight-data',
+          `${opts.dataStreamUrl}${streamPath(opts.overnightFeed)}`,
+          opts.credentials,
+          stockChannels,
+          opts.logger.child({ component: 'alpaca-overnight-stream' }),
+          `Your Alpaca plan does not include the ${opts.overnightFeed} overnight feed. Set ALPACA_OVERNIGHT_FEED to the one your plan has, or ALPACA_SESSIONS=extended to stop trading overnight.`,
+        )
+      : null;
     this.optionStream = new AlpacaDataStream(
       'alpaca-option-data',
       `${opts.dataStreamUrl}/v1beta1/${opts.optionsFeed}`,
@@ -95,27 +122,58 @@ export class AlpacaMarketDataProvider implements MarketDataProvider {
       opts.logger.child({ component: 'alpaca-option-stream' }),
     );
     this.stockStream.onMessage((m) => this.handleStock(m));
+    this.overnightStream?.onMessage((m) => this.handleStock(m));
     this.optionStream.onMessage((m) => this.handleOption(m));
-    this.stockStream.onStatus((s) => this.emitStatus('stock', s));
+    // The data service watches ONE stock stream: the one that carries the hours it is now.
+    this.stockStream.onStatus((s) => {
+      if (this.activeStream() === this.stockStream) this.emitStatus('stock', s);
+    });
+    this.overnightStream?.onStatus((s) => {
+      if (this.activeStream() === this.overnightStream) this.emitStatus('stock', s);
+    });
     this.optionStream.onStatus((s) => this.emitStatus('options', s));
+  }
+
+  /** The feed carrying the current hour: the one prices are read from and history is asked of. */
+  get stockFeed(): StockFeed {
+    return feedAt(this.plan, this.clock.now());
+  }
+
+  private activeStream(): AlpacaDataStream {
+    return this.overnightStream && this.stockFeed === this.plan.overnight ? this.overnightStream : this.stockStream;
   }
 
   start(): void {
     if (this.started) return;
     this.started = true;
     this.stockStream.start();
+    this.overnightStream?.start();
     // The options stream only connects once there is something to watch,
     // so an account without options data doesn't hold an idle connection.
     if (this.optionStream.symbolCount > 0) this.optionStream.start();
+    // At 20:00 and 04:00 the watched stream changes: say so, so the data service sees the other one's state at once.
+    this.lastActive = this.stockFeed;
+    if (this.overnightStream) {
+      this.feedTimer = setInterval(() => {
+        const now = this.stockFeed;
+        if (now === this.lastActive) return;
+        this.lastActive = now;
+        this.opts.logger.info({ feed: now }, 'stock data feed changes with the session');
+        this.emitStatus('stock', this.activeStream().getStatus());
+      }, 1000);
+    }
   }
 
   async stop(): Promise<void> {
     this.started = false;
-    await Promise.all([this.stockStream.stop(), this.optionStream.stop()]);
+    if (this.feedTimer) clearInterval(this.feedTimer);
+    this.feedTimer = null;
+    await Promise.all([this.stockStream.stop(), this.overnightStream?.stop(), this.optionStream.stop()]);
   }
 
   setStockSubscriptions(symbols: string[]): void {
     this.stockStream.setSymbols(symbols);
+    this.overnightStream?.setSymbols(symbols);
   }
 
   setOptionSubscriptions(contracts: string[]): void {
@@ -134,11 +192,11 @@ export class AlpacaMarketDataProvider implements MarketDataProvider {
   }
 
   status(): Record<DataStreamName, StreamStatus> {
-    return { stock: this.stockStream.getStatus(), options: this.optionStream.getStatus() };
+    return { stock: this.activeStream().getStatus(), options: this.optionStream.getStatus() };
   }
 
   forceReconnect(stream: DataStreamName, reason: string): void {
-    (stream === 'stock' ? this.stockStream : this.optionStream).forceReconnect(reason);
+    (stream === 'stock' ? this.activeStream() : this.optionStream).forceReconnect(reason);
   }
 
   private emitStatus(stream: DataStreamName, s: StreamStatus): void {
@@ -224,7 +282,31 @@ export class AlpacaMarketDataProvider implements MarketDataProvider {
     }
   }
 
+  /**
+   * History is asked of the feed that carried each hour: the primary feed by day, the overnight feed from 20:00 to
+   * 04:00. A piece the plan does not cover is skipped rather than failing the rest (the bars that did load still
+   * warm the indicators); the error is raised only when nothing at all could be loaded.
+   */
   async getHistoricalBars(symbols: string[], startMs: number, endMs: number): Promise<Bar[]> {
+    const out: Bar[] = [];
+    let failure: unknown = null;
+    for (const seg of feedSegments(this.plan, startMs, endMs)) {
+      // The free plan's derived overnight feed has no history of its own (Alpaca answers a request for it with an
+      // error: delayed history is `boats`), and its trades are 15 minutes late anyway.
+      if (seg.feed === 'overnight') continue;
+      try {
+        out.push(...(await this.historicalBarsFrom(symbols, seg.from, seg.to, seg.feed)));
+      } catch (err) {
+        failure = err;
+        this.opts.logger.warn({ feed: seg.feed, from: new Date(seg.from).toISOString(), err: (err as Error).message }, 'history for this stretch could not be loaded');
+      }
+    }
+    if (out.length === 0 && failure) throw failure;
+    out.sort((a, b) => a.t - b.t || a.symbol.localeCompare(b.symbol));
+    return out;
+  }
+
+  private async historicalBarsFrom(symbols: string[], startMs: number, endMs: number, feed: StockFeed): Promise<Bar[]> {
     const out: Bar[] = [];
     let pageToken: string | undefined;
     for (let page = 0; page < 50; page++) {
@@ -235,7 +317,7 @@ export class AlpacaMarketDataProvider implements MarketDataProvider {
         end: new Date(endMs).toISOString(),
         limit: 10_000,
         adjustment: 'raw',
-        feed: this.stockFeed,
+        feed,
         sort: 'asc',
         page_token: pageToken,
       });
@@ -248,7 +330,6 @@ export class AlpacaMarketDataProvider implements MarketDataProvider {
       pageToken = res.next_page_token ?? undefined;
       if (!pageToken) break;
     }
-    out.sort((a, b) => a.t - b.t || a.symbol.localeCompare(b.symbol));
     return out;
   }
 

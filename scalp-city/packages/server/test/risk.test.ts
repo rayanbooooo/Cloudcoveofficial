@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { evaluateRisk } from '../src/risk/RiskEngine.js';
+import { evaluateRisk, type ProposedOrder } from '../src/risk/RiskEngine.js';
 import type { OrderRecord } from '../src/orders/types.js';
 import { CONTRACT, LIMITS, NOW, account, brokerPosition, optionEntry, riskState, workerConfig } from './support/riskFixtures.js';
 
@@ -227,5 +227,83 @@ describe('RiskEngine — controls and gates', () => {
 
   it('never allows selling options to open', () => {
     expect(blockedBy(evaluateRisk(optionEntry({ purpose: 'MANUAL_OPEN', source: 'MANUAL', side: 'sell' }), riskState()))).toBe('no_short_options');
+  });
+});
+
+describe('RiskEngine — automated share entries outside the regular session', () => {
+  /** A worker's long entry of 5 QQQ with its stop 3 below. */
+  const shareEntry = (over: Partial<ProposedOrder> = {}): ProposedOrder => ({
+    orderId: null,
+    purpose: 'ENTRY',
+    source: 'WORKER',
+    workerId: 'qqq-og',
+    signalId: 'qqq-og:CALL:1',
+    signalBarCloseAt: NOW - 5_000,
+    symbol: 'QQQ',
+    underlying: 'QQQ',
+    assetClass: 'us_equity',
+    side: 'buy',
+    qty: 5,
+    type: 'limit',
+    limitPrice: 600.04,
+    stopPrice: null,
+    multiplier: 1,
+    referencePrice: 600.04,
+    softStop: 597,
+    ...over,
+  });
+  const ids = (d: ReturnType<typeof evaluateRisk>) => d.checks.map((c) => c.id);
+  const check = (d: ReturnType<typeof evaluateRisk>, id: string) => d.checks.find((c) => c.id === id)!;
+  const data = (over: Partial<NonNullable<ReturnType<typeof riskState>['signalData']>> = {}) => ({ dataMinutesLeft: null, barsDelayed: null, barsUnbroken: true, ...over });
+
+  it('adds none of these checks in the regular session, where the data is not in question', () => {
+    const d = evaluateRisk(shareEntry(), riskState());
+    expect(d.approved).toBe(true);
+    for (const id of ['bars_live', 'data_hours', 'bars_unbroken']) expect(ids(d)).not.toContain(id);
+  });
+
+  it('approves an entry on bars that can be traded on, from a feed that will keep reporting, with an unbroken run of minutes', () => {
+    const d = evaluateRisk(shareEntry(), riskState({ signalData: data() }));
+    expect(d.approved).toBe(true);
+    expect(check(d, 'bars_unbroken')).toMatchObject({ passed: true });
+    expect(ids(d)).not.toContain('bars_live');
+    expect(ids(d)).not.toContain('data_hours');
+  });
+
+  it('refuses bars that describe the market as it was a quarter of an hour ago, and says that before anything else about the signal', () => {
+    const reason = 'the free plan’s overnight feed reports trades 15 minutes late, so its bars are old news';
+    const d = evaluateRisk(shareEntry({ signalBarCloseAt: NOW - 15 * 60_000 }), riskState({ signalData: data({ barsDelayed: reason }) }));
+    expect(d.approved).toBe(false);
+    expect(blockedBy(d)).toBe('bars_live'); // not the less helpful "signal age"
+    expect(d.blockedBy!.detail).toBe(reason);
+  });
+
+  it('keeps entries out of the last ten minutes before the free IEX feed goes quiet', () => {
+    const left = (m: number) => evaluateRisk(shareEntry(), riskState({ signalData: data({ dataMinutesLeft: m }) }));
+    expect(left(10.5).approved).toBe(true);
+    for (const m of [10, 9.9, 3, 0.5]) {
+      const d = left(m);
+      expect(blockedBy(d), `${m} min`).toBe('data_hours');
+      expect(d.blockedBy!.detail).toContain('free IEX feed goes quiet at 17:00');
+    }
+    const none = left(0);
+    expect(blockedBy(none)).toBe('data_hours');
+    expect(none.blockedBy!.detail).toBe('the free IEX feed has no data at this hour');
+  });
+
+  it('refuses a signal on bars with a hole in them: a minute without a trade in the last four', () => {
+    const d = evaluateRisk(shareEntry(), riskState({ signalData: data({ barsUnbroken: false }) }));
+    expect(blockedBy(d)).toBe('bars_unbroken');
+    expect(d.blockedBy!.detail).toMatch(/thin market/);
+  });
+
+  it('is about automated signals only: a person’s own order, an exit and a flatten are not held to it', () => {
+    const bad = riskState({ signalData: data({ barsDelayed: 'late', dataMinutesLeft: 3, barsUnbroken: false }), brokerPositions: [brokerPosition({ symbol: 'QQQ', qty: 5, qtyAvailable: 5, avgEntryPrice: 600 })] });
+    const manual = evaluateRisk(shareEntry({ source: 'MANUAL', purpose: 'MANUAL_OPEN', workerId: null, softStop: null }), { ...bad, brokerPositions: [] });
+    for (const id of ['bars_live', 'data_hours', 'bars_unbroken']) expect(ids(manual)).not.toContain(id);
+    const exit = evaluateRisk(shareEntry({ purpose: 'EXIT', side: 'sell', softStop: null }), bad);
+    for (const id of ['bars_live', 'data_hours', 'bars_unbroken']) expect(ids(exit)).not.toContain(id);
+    const flatten = evaluateRisk(shareEntry({ source: 'FLATTEN', purpose: 'FLATTEN', side: 'sell', workerId: null, softStop: null }), bad);
+    for (const id of ['bars_live', 'data_hours', 'bars_unbroken']) expect(ids(flatten)).not.toContain(id);
   });
 });

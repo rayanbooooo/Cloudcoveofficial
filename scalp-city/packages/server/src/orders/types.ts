@@ -55,6 +55,13 @@ export interface OrderMeta {
   parentClientOrderId?: string | null;
   /** Broker's reason when it canceled the order (e.g. BOUNDS_VIOLATION, LINKED_TRADE_CLOSED). */
   cancelReason?: string | null;
+  /** Placed outside the regular session: sent to the broker as an extended-hours order, which must be a limit order. */
+  extendedHours?: boolean;
+  /**
+   * A market order (an exit, a flatten) that was priced as a limit through the touch because the broker takes no
+   * market orders at this hour. `bufferPct` is how far past the best bid/ask the limit sits.
+   */
+  convertedFromMarket?: { bufferPct: number } | null;
 }
 
 /** Authoritative local record of an order intent and its broker lifecycle. */

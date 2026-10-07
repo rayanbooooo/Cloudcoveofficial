@@ -179,6 +179,11 @@ export class LiveRiskContext implements RiskContextProvider {
       allowedUnderlyings: d.allowedUnderlyings,
       // A signal is only acted on shortly after its bar closed.
       maxSignalAgeMs: tfMinutes === 1 ? 30_000 : 60_000,
+      // Outside the regular session: what the data can support (see RiskState.signalData).
+      signalData:
+        o.assetClass === 'us_equity' && underlying && d.calendar.policy !== 'regular' && !d.calendar.isRegularOpen(now)
+          ? { dataMinutesLeft: d.marketData.dataMinutesLeft(now), barsDelayed: d.marketData.barsDelayedReason(), barsUnbroken: d.marketData.barsUnbroken(underlying, 4) }
+          : undefined,
     } satisfies RiskState & { now: number };
   }
 }

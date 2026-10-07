@@ -154,11 +154,18 @@ export type HealthStatus = 'ok' | 'warn' | 'error' | 'off';
 export type Severity = 'info' | 'success' | 'warn' | 'error';
 
 /**
- * Primary price feed. Alpaca: stock feeds. `oanda`: OANDA's own streaming
- * bid/ask prices (no exchange trades exist for OTC FX/CFDs; volume is the
- * number of price updates, i.e. tick volume).
+ * Primary price feed. Alpaca: stock feeds, plus the two overnight feeds (`boats` for the paid SIP plan, `overnight`
+ * for the free one) that carry 20:00–04:00 New York. `oanda`: OANDA's own streaming bid/ask prices (no exchange
+ * trades exist for OTC FX/CFDs; volume is the number of price updates, i.e. tick volume).
  */
-export type StockFeed = 'iex' | 'sip' | 'delayed_sip' | 'oanda';
+export type StockFeed = 'iex' | 'sip' | 'delayed_sip' | 'overnight' | 'boats' | 'oanda';
+
+/**
+ * Which sessions of the US trading day the bot may trade (Alpaca). `regular`: 09:30–16:00 New York. `extended`:
+ * pre-market, regular and after-hours (04:00–20:00). `all`: also the overnight session, so Sunday 20:00 to Friday
+ * 20:00 New York without a break.
+ */
+export type SessionPolicy = 'regular' | 'extended' | 'all';
 export type OptionsFeed = 'indicative' | 'opra';
 
 /**

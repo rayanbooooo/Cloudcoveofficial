@@ -83,6 +83,57 @@ First paper session checklist (Alpaca; the OANDA checklist is the same with *pra
    exit, and the journal entry. Confirm each against the Alpaca dashboard.
 4. Try the kill switch and FLATTEN ALL on paper so you know exactly what they do.
 
+### Trading every session (pre-market, after-hours, overnight)
+
+`ALPACA_SESSIONS` chooses the hours the fast scalpers (`ALPACA_WORKER_SET=scalp`) trade, in New York time:
+
+| Value | Trades | Notes |
+|---|---|---|
+| `regular` (default) | 09:30–16:00 | as before |
+| `extended` | 04:00–20:00 | pre-market, regular and after-hours; the broker's calendar gives the early closes |
+| `all` | Sunday 20:00 to Friday 20:00, without a break | adds the overnight session (Alpaca 24/5, Blue Ocean ATS); Monday 02:00 to Saturday 02:00 in Belgium |
+
+- **Orders.** Outside 09:30–16:00 Alpaca takes only **limit orders flagged extended-hours** (day or GTC). The
+  entries are already limit orders. An exit that would have been a market order (stop loss, end of day, flatten
+  all, kill switch, manual close) is sent as a limit **through the touch**: `ALPACA_OFFHOURS_EXIT_BUFFER_PCT`
+  (0.5%) under the bid for a sell, over the ask for a buy. It fills at the book like a market order, and the buffer
+  is the most it can be worse than the quote it was priced from. An opening market order and any options order are
+  refused at those hours rather than sent to be rejected.
+- **Prices decide where it can trade at all.** A worker only enters on a **fresh** price for the hour (30 s old at
+  most outside the regular session, `ALPACA_OFFHOURS_MAX_DATA_AGE_MS`), and what exists depends on the Alpaca data
+  plan. The app does not pretend otherwise:
+
+  | New York time | Free plan (`ALPACA_STOCK_FEED=iex`) | Paid plan (`ALPACA_STOCK_FEED=sip`) |
+  |---|---|---|
+  | 04:00–08:00 | no data | SIP |
+  | 08:00–17:00 | IEX | SIP |
+  | 17:00–20:00 | no data | SIP |
+  | 20:00–04:00 | `overnight` feed: quotes in real time, **trades 15 minutes late** | `boats` feed (real time) |
+
+  The overnight session has its own feed with its own WebSocket (`ALPACA_OVERNIGHT_FEED`). The free plan's
+  `overnight` feed is derived from BOATS: its trades, and so the bars and signals built from them, describe the
+  market as it was a quarter of an hour ago, so the app **refuses to enter on it** (risk check "Live bars") and the
+  data chip reads `QUOTES ONLY`. **On the free plan, `all` therefore adds only the IEX hours around the regular
+  session (08:00–09:30 and 16:00–17:00).** Real pre-market, after-hours and overnight trading needs the paid plan.
+  The free IEX feed also goes quiet at 17:00: no entries in the last 10 minutes before it ("Data hours"), and a
+  position is closed 5 minutes before, so nothing is stranded without a price overnight.
+- **Thin markets wait.** Outside the regular session a worker also needs an unbroken run of four 1-minute bars (a
+  trade in each) before it enters (risk check "Unbroken bars"): a minute without a single trade makes the next three
+  bars wait. Bars with holes in them make a move look bigger than it was.
+- **Positions are not carried across a gap.** Everything is flattened 5 minutes before the end of the unbroken run
+  of trading time (20:00 each day under `extended`; the Friday close, or the day before a holiday, under `all`),
+  and there are no entries in the last 10 minutes of it.
+- **The indicators** are computed over every traded bar. VWAP restarts at 04:00 (the trading day runs 04:00 to
+  04:00 so the night belongs to the day before), and warm-up reads history from the feed that carried each hour.
+- **"Today" is the trading day.** Under `all` it runs 04:00 to 04:00 New York time, so trades per day, a worker's
+  daily goal and loss limit, and the "today" figures do not start over at midnight in the middle of the night. (The
+  account-level daily-loss limit uses Alpaca's own day P&L.)
+- **Only the share scalpers** follow this setting. The patient ETF set and the options workers are built around
+  the regular open and refuse to start with `extended` or `all`.
+- **It has only been run against `FakeAlpaca`,** which enforces Alpaca's session rules (limit-only, flagged orders;
+  each feed carries only its own hours; the plan's 403/409 refusals). Alpaca's real behaviour at night (shorting,
+  rejections, how thin the book is) is unknown until you watch a paper night.
+
 ## Run against OANDA PRACTICE (gold, Nasdaq, FX, US30)
 
 Requirements: Node 22+, PostgreSQL 16, an OANDA **fxTrade Practice** account with a personal API token.
@@ -330,6 +381,10 @@ Automated tests never use live credentials.
   - Your first real run must be PAPER, with the health drawer open.
 - **IEX feed (free plan) covers only part of the volume.** VWAP and relative volume are IEX-only and
   labelled as such. SIP needs a paid data plan.
+- **Extended and overnight trading is limited by data and by the book.** The free IEX feed has no prices before
+  08:00 or after 17:00 and the free overnight feed is 15 minutes late, so on the free plan
+  `ALPACA_SESSIONS=all` is mostly the day; overnight books are thin, spreads are wide and a limit through the touch
+  can still fill worse than the quote in a fast move. See "Trading every session".
 - **The indicative options feed is not the NBBO.** Automated options trading is blocked on it unless
   you opt in for paper only (`PAPER_ALLOW_INDICATIVE_OPTIONS`). Live always needs OPRA.
 - **P&L is gross.** Regulatory and exchange fees on options are not deducted.

@@ -1,3 +1,4 @@
+import { DateTime } from 'luxon';
 import type {
   Bar,
   MarketDataStatusView,
@@ -66,6 +67,8 @@ export interface MarketDataServiceOptions {
   env: TradingEnvironment;
   symbols: string[];
   maxDataAgeMs: number;
+  /** How old the latest event may be outside the regular session, where trading is thin (default: maxDataAgeMs). */
+  offHoursMaxDataAgeMs?: number;
   maxOptionQuoteAgeMs: number;
   paperAllowIndicativeOptions: boolean;
   /** Grace after a minute ends before our own aggregate is finalized. */
@@ -82,6 +85,14 @@ export function stockFeedLabel(feed: StockFeed): { label: string; realtime: bool
       return { label: 'LIVE · IEX ONLY', realtime: true, partialVolume: true, tickVolume: false, priceBasis: 'trades' };
     case 'delayed_sip':
       return { label: 'DELAYED 15 MIN', realtime: false, partialVolume: false, tickVolume: false, priceBasis: 'trades' };
+    // The overnight session (20:00–04:00 New York, Blue Ocean ATS). BOATS (paid plan) is real time. The free plan's
+    // `overnight` feed is derived from it: indicative quotes in real time, but trades (and so the bars built from
+    // them) 15 minutes late. Its quotes keep a price fresh enough to manage a position by; its bars are not traded on
+    // (see barsDelayedReason).
+    case 'boats':
+      return { label: 'LIVE · OVERNIGHT (BOATS)', realtime: true, partialVolume: true, tickVolume: false, priceBasis: 'trades' };
+    case 'overnight':
+      return { label: 'OVERNIGHT FEED · TRADES 15 MIN LATE', realtime: true, partialVolume: true, tickVolume: false, priceBasis: 'trades' };
     case 'oanda':
       return { label: 'LIVE · OANDA PRICES', realtime: true, partialVolume: false, tickVolume: true, priceBasis: 'mid' };
   }
@@ -110,7 +121,6 @@ export class MarketDataService {
   private stockConnectedAt: number | null = null;
   private wasConnected = false;
   private backfilling = false;
-  readonly stockFeed: StockFeed;
   readonly optionsFeed: OptionsFeed;
 
   constructor(
@@ -121,7 +131,6 @@ export class MarketDataService {
     private readonly logger: Logger,
     private readonly opts: MarketDataServiceOptions,
   ) {
-    this.stockFeed = provider.stockFeed;
     this.optionsFeed = provider.optionsFeed;
     for (const s of opts.symbols) {
       this.stores.set(s, new BarStore(s));
@@ -131,6 +140,11 @@ export class MarketDataService {
 
   get symbols(): string[] {
     return [...this.stores.keys()];
+  }
+
+  /** The feed carrying the current hour (it changes at 20:00 and 04:00 New York when overnight is traded). */
+  get stockFeed(): StockFeed {
+    return this.provider.stockFeed;
   }
 
   /**
@@ -253,9 +267,12 @@ export class MarketDataService {
     const now = this.clock.now();
     for (const store of this.stores.values()) this.emitBars(store.tick(now, this.opts.barGraceMs ?? 5000));
     // A socket can stay "connected" yet deliver nothing. During market hours
-    // that is treated as a failure and the stream is rebuilt.
+    // that is treated as a failure and the stream is rebuilt. Outside the regular session silence is ordinary (one
+    // trade in five minutes is a busy night), so it takes twenty times as long to count, and on the free IEX feed,
+    // which has nothing to say before 08:00 or after 17:00, it does not count at all.
     const status = this.provider.status().stock;
-    const mute = this.opts.muteTimeoutMs ?? 60_000;
+    const mute = (this.opts.muteTimeoutMs ?? 60_000) * (this.calendar.isRegularOpen(now) ? 1 : 20);
+    if (this.iexSilentAt(now) && this.lastStockMessageAt !== null) this.lastStockMessageAt = now; // silence is expected: the count starts when IEX does
     if (
       status.state === 'CONNECTED' &&
       this.calendar.isOpen(now) &&
@@ -287,8 +304,7 @@ export class MarketDataService {
   /** Load real historical 1-minute bars so indicators are warm at startup (spec §86). */
   async warmUp(): Promise<void> {
     const now = this.clock.now();
-    const sessions = this.calendar.recentSessions(3, now);
-    const start = sessions[0]?.openMs ?? now - 4 * 86_400_000;
+    const start = this.calendar.warmUpFrom(now);
     try {
       const bars = await this.provider.getHistoricalBars(this.symbols, start, now);
       for (const store of this.stores.values()) {
@@ -416,8 +432,56 @@ export class MarketDataService {
     if (stream.state !== 'CONNECTED') return { lastEventAt: st.lastEventAt, ageMs, stale: true, reason: `market data ${stream.state.toLowerCase()}` };
     if (!stockFeedLabel(this.stockFeed).realtime) return { lastEventAt: st.lastEventAt, ageMs, stale: true, reason: 'feed is delayed' };
     if (ageMs === null) return { lastEventAt: null, ageMs: null, stale: true, reason: 'no data received yet' };
-    if (ageMs > this.opts.maxDataAgeMs) return { lastEventAt: st.lastEventAt, ageMs, stale: true, reason: `last event ${(ageMs / 1000).toFixed(1)}s ago` };
+    // Outside the regular session quotes arrive far less often, so they may be older before they count as stale.
+    const limit = this.calendar.isRegularOpen(now) ? this.opts.maxDataAgeMs : Math.max(this.opts.maxDataAgeMs, this.opts.offHoursMaxDataAgeMs ?? 0);
+    if (ageMs > limit) return { lastEventAt: st.lastEventAt, ageMs, stale: true, reason: `last event ${this.ago(ageMs)} ago${this.noDataHint(now)}` };
     return { lastEventAt: st.lastEventAt, ageMs, stale: false, reason: null };
+  }
+
+  private ago(ms: number): string {
+    return ms < 120_000 ? `${(ms / 1000).toFixed(1)}s` : ms < 7_200_000 ? `${Math.round(ms / 60_000)} min` : `${(ms / 3_600_000).toFixed(1)} h`;
+  }
+
+  /**
+   * Minutes until the feed in use stops reporting for the day, or null when it covers its whole session. The free
+   * IEX feed has nothing before 08:00 or after 17:00 New York (0 outside them): a position opened shortly before it
+   * goes quiet could not be managed until the next morning.
+   */
+  dataMinutesLeft(now = this.clock.now()): number | null {
+    if (this.stockFeed !== 'iex') return null;
+    const local = DateTime.fromMillis(now, { zone: 'America/New_York' });
+    if (local.hour < 8 || local.hour >= 17) return 0;
+    return (local.set({ hour: 17, minute: 0, second: 0, millisecond: 0 }).toMillis() - now) / 60_000;
+  }
+
+  /**
+   * Why the bars of the feed in use cannot be traded on, or null. The free plan's overnight feed reports trades 15
+   * minutes late: a bar built from them describes the market as it was a quarter of an hour ago.
+   */
+  barsDelayedReason(): string | null {
+    return this.stockFeed === 'overnight' ? 'the free plan’s overnight feed reports trades 15 minutes late, so its bars are old news (the paid plan’s BOATS feed is real time)' : null;
+  }
+
+  /** Did each of the last `run` minutes of a symbol have a bar, i.e. at least one trade? False while there are fewer bars than that. */
+  barsUnbroken(symbol: string, run: number): boolean {
+    const bars = this.finalBars(symbol);
+    if (bars.length < run) return false;
+    for (let i = bars.length - run + 1; i < bars.length; i++) {
+      if (bars[i]!.t - bars[i - 1]!.t !== 60_000) return false;
+    }
+    return true;
+  }
+
+  /** IEX itself only trades 08:00–17:00 New York, so the free feed has nothing to report outside those hours. */
+  private iexSilentAt(now: number): boolean {
+    if (this.stockFeed !== 'iex') return false;
+    const h = DateTime.fromMillis(now, { zone: 'America/New_York' }).hour;
+    return h < 8 || h >= 17;
+  }
+
+  /** Say so when silence is just the free IEX feed's hours. */
+  private noDataHint(now: number): string {
+    return this.iexSilentAt(now) ? ' — the free IEX feed has no data at this hour (it covers 08:00–17:00 New York; SIP needs Alpaca’s paid plan)' : '';
   }
 
   /** Closed 1-minute bars plus the forming bar. */
@@ -471,6 +535,7 @@ export class MarketDataService {
       tickVolume: stock.tickVolume,
       priceBasis: stock.priceBasis,
       maxDataAgeMs: this.opts.maxDataAgeMs,
+      offHoursMaxDataAgeMs: Math.max(this.opts.maxDataAgeMs, this.opts.offHoursMaxDataAgeMs ?? 0),
       symbols,
     };
   }

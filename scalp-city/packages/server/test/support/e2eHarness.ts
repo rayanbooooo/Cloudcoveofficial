@@ -32,8 +32,8 @@ export interface E2E {
   close(): Promise<void>;
 }
 
-export async function startE2E(opts: { env?: Record<string, string>; fake?: Partial<FakeAlpacaOptions>; startTime?: string } = {}): Promise<E2E> {
-  const clock = new ManualClock(DateTime.fromISO(`${SESSION_DATE}T${opts.startTime ?? '11:00:30'}`, { zone: NY }).toMillis());
+export async function startE2E(opts: { env?: Record<string, string>; fake?: Partial<FakeAlpacaOptions>; startTime?: string; startDate?: string } = {}): Promise<E2E> {
+  const clock = new ManualClock(DateTime.fromISO(`${opts.startDate ?? SESSION_DATE}T${opts.startTime ?? '11:00:30'}`, { zone: NY }).toMillis());
   const fake = new FakeAlpaca({
     clock,
     keyId: 'PKTESTKEY',

@@ -115,6 +115,12 @@ export interface RiskState {
   signalAlreadyUsed: boolean;
   allowedUnderlyings: string[];
   maxSignalAgeMs: number;
+  /**
+   * What the data can support for an automated share entry outside the regular session (absent in the regular
+   * session, where none of this applies): how long the feed in use will keep reporting, whether its bars can be
+   * traded on, and whether each of the last four minutes had a trade.
+   */
+  signalData?: { dataMinutesLeft: number | null; barsDelayed: string | null; barsUnbroken: boolean };
 }
 
 const OPEN_PURPOSES: ReadonlySet<OrderPurpose> = new Set(['ENTRY', 'MANUAL_OPEN']);
@@ -233,7 +239,8 @@ export function evaluateRisk(o: ProposedOrder, s: RiskState): RiskDecisionView {
       c.add('market_open', 'Market open', instrOk, instrDetail);
     }
   } else {
-    c.add('market_open', 'Market open', s.market.isOpen, s.market.isOpen ? 'regular session' : `market ${s.market.label.toLowerCase().replace('_', ' ')}`);
+    const session = s.market.label.toLowerCase().replace('_', ' ');
+    c.add('market_open', 'Market open', s.market.isOpen, s.market.isOpen ? (s.market.label === 'OPEN' ? 'regular session' : session) : `market ${session}`);
   }
   c.add('clock', 'Server clock', s.clock.ok, s.clock.ok ? `skew ${s.clock.skewMs ?? 0}ms` : s.clock.skewMs === null ? 'broker clock not verified' : `skew ${s.clock.skewMs}ms`);
 
@@ -248,6 +255,24 @@ export function evaluateRisk(o: ProposedOrder, s: RiskState): RiskDecisionView {
   if (opening || o.purpose === 'EXIT') {
     const f = s.freshness;
     c.add('data_fresh', 'Market data', f !== null && !f.stale, f === null ? 'no data' : f.stale ? `STALE — ${f.reason}` : `live ${f.ageMs}ms`);
+  }
+
+  // Outside the regular session the data is thinner, shorter and, on one feed, late: an automated entry needs bars
+  // that can be traded on, a feed that will still be reporting while the position is open, and an unbroken run of
+  // minutes (bars with holes in them make a move look bigger than it was).
+  if (opening && automated && s.signalData) {
+    const sd = s.signalData;
+    if (sd.barsDelayed !== null) c.add('bars_live', 'Live bars', false, sd.barsDelayed);
+    if (sd.dataMinutesLeft !== null) {
+      const left = sd.dataMinutesLeft;
+      c.add(
+        'data_hours',
+        'Data hours',
+        left > L.noEntriesBeforeCloseMinutes,
+        left <= 0 ? 'the free IEX feed has no data at this hour' : `${left.toFixed(1)} min until the free IEX feed goes quiet at 17:00 (no entries in the last ${L.noEntriesBeforeCloseMinutes})`,
+      );
+    }
+    c.add('bars_unbroken', 'Unbroken bars', sd.barsUnbroken, sd.barsUnbroken ? 'each of the last 4 minutes had trades' : 'thin market: a minute without a trade in the last 4');
   }
 
   if (o.purpose === 'ENTRY') {

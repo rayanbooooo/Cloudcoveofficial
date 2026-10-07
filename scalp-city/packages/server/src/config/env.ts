@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { z } from 'zod';
-import type { OptionsFeed, RiskLimits, StockFeed, TradingEnvironment, Venue } from '@scalp-city/shared';
+import type { OptionsFeed, RiskLimits, SessionPolicy, StockFeed, TradingEnvironment, Venue } from '@scalp-city/shared';
 
 /**
  * Which Alpaca workers run: fast 1-minute scalpers on the ETF stand-ins for gold/Nasdaq/FX/US30 (default), the same
@@ -80,6 +80,12 @@ export interface AppConfig {
   nonStandardEndpoints: string[];
   stockFeed: StockFeed;
   optionsFeed: OptionsFeed;
+  /** Alpaca: which sessions of the trading day the workers trade (ALPACA_SESSIONS). */
+  sessions: SessionPolicy;
+  /** Feed that carries the overnight session when `sessions` is `all`: boats (paid SIP plan) or overnight (free plan). */
+  overnightFeed: 'overnight' | 'boats';
+  /** How far past the touch an off-hours exit is priced (extended hours accept limit orders only), in percent. */
+  offHoursExitBufferPct: number;
   paperAllowIndicativeOptions: boolean;
   databaseUrl: string;
   sessionSecret: string;
@@ -88,6 +94,8 @@ export interface AppConfig {
   riskDefaults: RiskLimits;
   thresholds: {
     maxDataAgeMs: number;
+    /** Quotes are allowed to be this old outside the regular session, where trading is thin. */
+    offHoursMaxDataAgeMs: number;
     maxOptionQuoteAgeMs: number;
     maxClockSkewMs: number;
   };
@@ -189,6 +197,18 @@ const EnvSchema = z.object({
     .optional()
     .transform((v) => (v === undefined || v.trim() === '' ? 'indicative' : v.trim().toLowerCase()))
     .pipe(z.enum(['indicative', 'opra'])),
+  ALPACA_SESSIONS: z
+    .string()
+    .optional()
+    .transform((v) => (v === undefined || v.trim() === '' ? 'regular' : v.trim().toLowerCase()))
+    .pipe(z.enum(['regular', 'extended', 'all'])),
+  ALPACA_OVERNIGHT_FEED: z
+    .string()
+    .optional()
+    .transform((v) => (v === undefined || v.trim() === '' ? 'auto' : v.trim().toLowerCase()))
+    .pipe(z.enum(['auto', 'overnight', 'boats'])),
+  ALPACA_OFFHOURS_EXIT_BUFFER_PCT: positiveNumber(0.5),
+  ALPACA_OFFHOURS_MAX_DATA_AGE_MS: positiveInt(30_000),
   PAPER_ALLOW_INDICATIVE_OPTIONS: flag(false),
   DATABASE_URL: optionalString,
   SESSION_SECRET: optionalString,
@@ -415,6 +435,20 @@ export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
   if (symbols.length === 0) throw new ConfigError('at least one symbol/instrument must be configured');
   if (new Set(symbols).size !== symbols.length) throw new ConfigError('a symbol/instrument is listed twice');
 
+  // ── Sessions ───────────────────────────────────────────────────────────
+  const sessions = e.ALPACA_SESSIONS as SessionPolicy;
+  if (sessions !== 'regular') {
+    // Options do not trade outside 09:30–16:00, and the patient strategies are built around the regular open
+    // (their opening range, their 5 and 15 minute bars). Only the share scalpers follow the session policy.
+    if (venue !== 'alpaca') throw new ConfigError(`ALPACA_SESSIONS=${sessions} is only for BROKER=alpaca`);
+    if (e.ALPACA_WORKER_SET !== 'scalp') {
+      throw new ConfigError(`ALPACA_SESSIONS=${sessions} needs ALPACA_WORKER_SET=scalp (the options and patient ETF workers trade the regular session only)`);
+    }
+  }
+  const stockFeed = e.ALPACA_STOCK_FEED as StockFeed;
+  const overnightFeed: 'overnight' | 'boats' = e.ALPACA_OVERNIGHT_FEED === 'auto' ? (stockFeed === 'sip' ? 'boats' : 'overnight') : e.ALPACA_OVERNIGHT_FEED;
+  if (e.ALPACA_OFFHOURS_EXIT_BUFFER_PCT > 5) throw new ConfigError('ALPACA_OFFHOURS_EXIT_BUFFER_PCT must be 5 or less (a percentage)');
+
   const allowedOrigins = (e.ALLOWED_ORIGINS ?? 'http://localhost:5173,http://127.0.0.1:5173')
     .split(',')
     .map((s) => s.trim())
@@ -434,8 +468,11 @@ export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
     oanda,
     endpoints: { paperTrading, liveTrading, data, dataStream },
     nonStandardEndpoints,
-    stockFeed: e.ALPACA_STOCK_FEED as StockFeed,
+    stockFeed,
     optionsFeed: e.ALPACA_OPTIONS_FEED as OptionsFeed,
+    sessions,
+    overnightFeed,
+    offHoursExitBufferPct: e.ALPACA_OFFHOURS_EXIT_BUFFER_PCT,
     paperAllowIndicativeOptions: e.PAPER_ALLOW_INDICATIVE_OPTIONS,
     databaseUrl,
     sessionSecret,
@@ -443,6 +480,7 @@ export function parseConfig(source: NodeJS.ProcessEnv): AppConfig {
     riskDefaults,
     thresholds: {
       maxDataAgeMs: e.MAX_DATA_AGE_MS,
+      offHoursMaxDataAgeMs: Math.max(e.ALPACA_OFFHOURS_MAX_DATA_AGE_MS, e.MAX_DATA_AGE_MS),
       maxOptionQuoteAgeMs: e.MAX_OPTION_QUOTE_AGE_MS,
       maxClockSkewMs: e.MAX_CLOCK_SKEW_MS,
     },

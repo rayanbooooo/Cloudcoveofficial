@@ -111,6 +111,31 @@ describe('why a READY signal is not placing', () => {
     expect(codes(entryBlockers(worker({}, { consumed: true }), system(), null, NOW))).toEqual(['SIGNAL_USED']);
   });
 
+  it('says which hours are traded, and how to change them, when the market is closed under the regular policy', () => {
+    const b = entryBlockers(worker(), system({}, { isOpen: false, label: 'AFTER_HOURS', sessions: 'regular', nextOpen: OPEN_AT }), null, NOW);
+    expect(b[0]!.text).toBe('Market closed (after hours)');
+    expect(b[0]!.detail).toContain('the regular session only (09:30–16:00 New York)');
+    expect(b[0]!.detail).toContain('set ALPACA_SESSIONS to extended or all');
+  });
+
+  it('with extended or overnight trading, a closed market means the hours the policy does not trade', () => {
+    const extended = entryBlockers(worker(), system({}, { isOpen: false, label: 'CLOSED', sessions: 'extended', nextOpen: OPEN_AT }), null, NOW);
+    expect(extended[0]!.text).toBe('Market closed'); // not "closed (closed)"
+    expect(extended[0]!.detail).toContain('pre-market, regular hours and after-hours (04:00–20:00 New York, weekdays)');
+    expect(extended[0]!.detail).not.toContain('ALPACA_SESSIONS');
+
+    const all = entryBlockers(worker(), system({}, { isOpen: false, label: 'CLOSED', sessions: 'all', nextOpen: OPEN_AT }), null, NOW);
+    expect(all[0]!.text).toBe('Market closed');
+    expect(all[0]!.detail).toContain('around the clock, from Sunday 20:00 to Friday 20:00 New York time');
+    expect(all[0]!.detail).not.toContain('ALPACA_SESSIONS');
+  });
+
+  it('does not call an open pre-market or overnight session closed', () => {
+    for (const label of ['PRE_MARKET', 'AFTER_HOURS', 'OVERNIGHT']) {
+      expect(entryBlockers(worker(), system({}, { isOpen: true, label, sessions: 'all' }), null, NOW)).toEqual([]);
+    }
+  });
+
   it('words the closed OANDA session as a trading window', () => {
     const b = entryBlockers(worker(), system({ venue: 'oanda' }, { isOpen: false, label: 'CLOSED', nextOpen: OPEN_AT }), null, NOW);
     expect(b[0]!.text).toBe('Outside the trading window');

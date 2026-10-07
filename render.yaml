@@ -66,6 +66,15 @@ services:
       # strategy that trades rarely; options = the original QQQ/SPY/IWM options workers.
       - key: ALPACA_WORKER_SET
         value: scalp
+      # Which sessions the scalpers trade (New York time): regular = 09:30-16:00; extended = 04:00-20:00; all =
+      # Sunday 20:00 to Friday 20:00 without a break, including the overnight session. Outside 09:30-16:00 Alpaca
+      # takes limit orders only (the app prices exits as marketable limits). A worker only enters on a FRESH price,
+      # and the data plan decides where one exists: the free IEX feed (ALPACA_STOCK_FEED=iex) reports only
+      # 08:00-17:00 New York, and its overnight feed delivers trades 15 minutes late, so on the free plan this
+      # setting adds only the IEX pre-open and post-close hours. 04:00-20:00 needs SIP (ALPACA_STOCK_FEED=sip) and
+      # the night needs BOATS, both Alpaca's paid data plan. See README, "Trading every session".
+      - key: ALPACA_SESSIONS
+        value: all
       # Deliberately small starting limits. They seed the risk settings on FIRST boot only; after
       # that the app's Risk drawer is the source of truth (an existing deployment keeps what it
       # stored, so raise "position size" there if share entries report that one share is over the limit).

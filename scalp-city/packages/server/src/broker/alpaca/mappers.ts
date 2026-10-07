@@ -175,5 +175,16 @@ export function nyTimeToMs(date: string, time: string): number {
 
 export function mapCalendarDay(r: Raw): BrokerCalendarDay {
   const date = String(r.date);
-  return { date, openMs: nyTimeToMs(date, String(r.open)), closeMs: nyTimeToMs(date, String(r.close)) };
+  const day: BrokerCalendarDay = { date, openMs: nyTimeToMs(date, String(r.open)), closeMs: nyTimeToMs(date, String(r.close)) };
+  // Alpaca's calendar also gives the extended-hours session ("0400" to "2000"; earlier on half days).
+  if (typeof r.session_open === 'string' && typeof r.session_close === 'string') {
+    try {
+      day.extOpenMs = nyTimeToMs(date, r.session_open);
+      day.extCloseMs = nyTimeToMs(date, r.session_close);
+    } catch {
+      delete day.extOpenMs;
+      delete day.extCloseMs;
+    }
+  }
+  return day;
 }

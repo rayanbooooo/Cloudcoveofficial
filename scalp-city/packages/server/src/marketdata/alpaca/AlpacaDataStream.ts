@@ -25,6 +25,8 @@ export class AlpacaDataStream extends ReconnectingStream {
     private readonly credentials: Credentials,
     private readonly channels: readonly Channel[],
     logger: Logger,
+    /** What to tell the person when the account's plan does not include this feed. */
+    private readonly subscriptionHint = 'Check ALPACA_STOCK_FEED / ALPACA_OPTIONS_FEED against your Alpaca data plan.',
   ) {
     super({
       name,
@@ -126,7 +128,7 @@ export class AlpacaDataStream extends ReconnectingStream {
         this.ws?.close(4406, msg);
         break;
       case 409: // insufficient subscription — retrying cannot fix this
-        this.fatalError = `insufficient subscription for this feed (${msg}). Check ALPACA_STOCK_FEED / ALPACA_OPTIONS_FEED against your Alpaca data plan.`;
+        this.fatalError = `insufficient subscription for this feed (${msg}). ${this.subscriptionHint}`;
         this.ws?.close(4409, msg);
         break;
       default:

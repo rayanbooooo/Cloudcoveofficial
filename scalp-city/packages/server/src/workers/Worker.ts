@@ -30,7 +30,6 @@ import type { Logger } from '../core/logger.js';
 import { iso, type Db } from '../db/db.js';
 import { floorUnits, roundPrice, type InstrumentCatalog } from '../market/InstrumentCatalog.js';
 import type { MarketCalendar } from '../market/MarketCalendar.js';
-import { nyDate } from '../market/MarketCalendar.js';
 import type { MarketDataService } from '../marketdata/MarketDataService.js';
 import type { ContractSelector } from '../options/ContractSelector.js';
 import type { OrderEngine } from '../orders/OrderEngine.js';
@@ -128,7 +127,7 @@ export class Worker {
 
   // ── Bars & indicators ───────────────────────────────────────────────────
 
-  /** Regular-session bars in the worker's timeframe. */
+  /** Bars from the sessions this deployment trades (the regular one unless ALPACA_SESSIONS says more), in the worker's timeframe. */
   private bars(includeForming: boolean): Bar[] {
     const raw = includeForming ? this.d.marketData.bars(this.config.symbol) : this.d.marketData.finalBars(this.config.symbol);
     const rth = raw.filter((b) => this.d.calendar.sessionKey(b.t) !== null);
@@ -139,9 +138,9 @@ export class Worker {
   private snapshot(bars: Bar[]): IndicatorSnapshot | null {
     const last = bars[bars.length - 1];
     if (!last) return null;
-    const session = this.d.calendar.sessionFor(nyDate(last.t));
-    if (!session) return null;
-    return computeIndicatorSnapshot(bars, this.config.params, { openMs: session.openMs, closeMs: session.closeMs, sessionKey: this.d.calendar.sessionKey }, this.d.clock.now());
+    const window = this.d.calendar.indicatorWindow(last.t);
+    if (!window) return null;
+    return computeIndicatorSnapshot(bars, this.config.params, { openMs: window.openMs, closeMs: window.closeMs, sessionKey: this.d.calendar.sessionKey }, this.d.clock.now());
   }
 
   private barCloseAt(t: number): number {
@@ -603,6 +602,9 @@ export class Worker {
     }
     const toClose = this.d.calendar.minutesToClose(now);
     if (toClose !== null && toClose <= x.flattenBeforeCloseMinutes) return { reason: 'END_OF_DAY', urgent: true };
+    // The free IEX feed goes quiet at 17:00: be out while there is still a price to get out at.
+    const dataLeft = this.d.calendar.policy !== 'regular' ? this.d.marketData.dataMinutesLeft(now) : null;
+    if (dataLeft !== null && dataLeft <= x.flattenBeforeCloseMinutes) return { reason: 'END_OF_DAY', urgent: true };
     const plan = this.planFor(pos);
     if (plan) {
       const stopHit = long ? exec <= pos.avgPrice - plan.stopDistance : exec >= pos.avgPrice + plan.stopDistance;

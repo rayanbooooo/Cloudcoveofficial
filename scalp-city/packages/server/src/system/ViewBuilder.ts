@@ -35,6 +35,8 @@ export class ViewBuilder {
   private paperRoundTrips = 0;
   dbOk = true;
   wsClients = 0;
+  /** When today's trading day began (set once the trading context exists). Default: New York midnight. */
+  dayStart: (() => number | undefined) | null = null;
 
   constructor(
     private readonly config: AppConfig,
@@ -46,7 +48,7 @@ export class ViewBuilder {
   async refresh(env: TradingEnvironment): Promise<void> {
     const venue = this.config.venue;
     try {
-      const midnight = DateTime.fromMillis(this.clock.now(), { zone: 'America/New_York' }).startOf('day').toMillis();
+      const midnight = this.dayStart?.() ?? DateTime.fromMillis(this.clock.now(), { zone: 'America/New_York' }).startOf('day').toMillis();
       const r = await this.db.query<{ symbol: string; realized: number }>(
         `SELECT t.symbol, COALESCE(SUM(e.realized_pnl),0) AS realized FROM trade_events e JOIN trades t ON t.id = e.trade_id
           WHERE t.venue = $1 AND t.env = $2 AND e.kind IN ('EXIT_FILL', 'ENTRY_FILL') AND e.occurred_at >= $3 GROUP BY t.symbol`,
@@ -326,6 +328,7 @@ export class ViewBuilder {
           tickVolume: stockFeed.tickVolume,
           priceBasis: stockFeed.priceBasis,
           maxDataAgeMs: this.config.thresholds.maxDataAgeMs,
+          offHoursMaxDataAgeMs: this.config.thresholds.offHoursMaxDataAgeMs,
           symbols: Object.fromEntries(this.config.symbols.map((s) => [s, { lastEventAt: null, ageMs: null, stale: true }])),
         };
     const reasons = ctx.haltReasons();
@@ -368,7 +371,7 @@ export class ViewBuilder {
       marketData: md,
       market: configured
         ? ctx.calendar.status()
-        : { isOpen: false, label: 'UNKNOWN', sessionOpen: null, sessionClose: null, nextOpen: null, nextClose: null, earlyClose: false, checkedAt: null },
+        : { isOpen: false, label: 'UNKNOWN', sessions: this.config.sessions, sessionOpen: null, sessionClose: null, nextOpen: null, nextClose: null, earlyClose: false, checkedAt: null },
       clock: configured ? ctx.calendar.clockStatus() : { brokerSkewMs: null, ok: false, checkedAt: null },
       breakers: ctx.breakers.views(),
       reconciliation: configured ? ctx.reconciler.status() : { status: 'UNKNOWN', lastRunAt: null, mismatches: [], externalPositions: [] },

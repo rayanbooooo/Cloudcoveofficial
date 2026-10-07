@@ -553,7 +553,9 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
     if (q.date && q.date !== nyDate(now)) {
       const session = c.calendar.sessionFor(q.date);
       if (!session) throw new HttpError(404, 'NO_SESSION', `${q.date} was not a trading session (or is outside the loaded calendar)`);
-      bars = (await c.provider.getHistoricalBars([q.symbol], session.openMs, session.closeMs)).filter((b) => c.calendar.sessionKey(b.t) !== null);
+      // A past day shows the hours this deployment trades: the regular session, or the extended one around it.
+      const extended = c.calendar.policy !== 'regular';
+      bars = (await c.provider.getHistoricalBars([q.symbol], extended ? session.extOpenMs : session.openMs, extended ? session.extCloseMs : session.closeMs)).filter((b) => c.calendar.sessionKey(b.t) !== null);
       source = 'historical';
     } else {
       if (!c.marketData.symbols.includes(q.symbol)) throw new HttpError(404, 'NOT_STREAMED', `${q.symbol} is not a streamed symbol`);
@@ -570,7 +572,7 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
       ema: ema(closes, 50),
       atr: atr(tfBars, 14),
       source,
-      feedLabel: `${stockFeedLabel(app.config.venue === 'oanda' ? 'oanda' : app.config.stockFeed).label}${app.config.venue === 'oanda' ? ' · MID · TICK VOLUME' : ''}`,
+      feedLabel: `${stockFeedLabel(app.config.venue === 'oanda' ? 'oanda' : c.marketData.stockFeed).label}${app.config.venue === 'oanda' ? ' · MID · TICK VOLUME' : ''}`,
     };
     return response;
   });

@@ -15,6 +15,7 @@
  *   DEMO_BROKER=oanda npm run demo   # OANDA-style demo: gold, NAS100, GBPUSD, EURJPY, US30
  *   DEMO_OANDA_OFFERED=XAU_USD,GBP_USD,EUR_JPY DEMO_BROKER=oanda npm run demo   # an account that is not offered the others
  *   DEMO_AUTOTRADE=1 npm run demo    # also switch autotrading on (fake account)
+ *   DEMO_SESSIONS=extended|all DEMO_START=06:40:00 npm run demo   # fast scalpers outside 09:30-16:00 (the fake then enforces Alpaca's session rules)
  *
  * Hosting the demo behind a public URL (e.g. a Vercel Sandbox): set HOST=0.0.0.0,
  * PUBLIC_URL / ALLOWED_ORIGINS to that URL, COOKIE_SECURE=true and a strong
@@ -50,6 +51,10 @@ const SET = (process.env.DEMO_SET ?? 'scalp').toLowerCase();
 if (SET !== 'scalp' && SET !== 'etf' && SET !== 'options') throw new Error(`DEMO_SET must be scalp, etf or options, got "${SET}"`);
 const ETF_MARKETS = SET !== 'options';
 if (BROKER !== 'alpaca' && BROKER !== 'oanda') throw new Error(`DEMO_BROKER must be alpaca or oanda, got "${BROKER}"`);
+/** Alpaca demo: which sessions the fast scalpers trade (ALPACA_SESSIONS). Anything but `regular` makes the fake enforce Alpaca's session rules. */
+const SESSIONS = (process.env.DEMO_SESSIONS ?? 'regular').toLowerCase();
+if (SESSIONS !== 'regular' && SESSIONS !== 'extended' && SESSIONS !== 'all') throw new Error(`DEMO_SESSIONS must be regular, extended or all, got "${SESSIONS}"`);
+if (SESSIONS !== 'regular' && (SET !== 'scalp' || BROKER !== 'alpaca')) throw new Error('DEMO_SESSIONS=extended|all needs the Alpaca fast scalpers (DEMO_SET=scalp, DEMO_BROKER=alpaca)');
 
 /** Real-time clock shifted into the fake session, so time flows at 1× from START. */
 class OffsetClock implements Clock {
@@ -173,6 +178,15 @@ async function main(): Promise<void> {
     sessionDate: SESSION_DATE,
     historyPath,
     historyVolume: (_s, i) => 8_000 + Math.round(4_000 * Math.abs(Math.sin(i / 3))),
+    // Outside the regular session: Alpaca's session rules, a data plan that covers every hour, and history from the
+    // start of the trading day (04:00, or the Sunday 20:00 start for the small hours of a Monday).
+    ...(SESSIONS === 'regular'
+      ? {}
+      : {
+          sessions: true,
+          dataPlan: 'plus' as const,
+          historyFrom: DateTime.fromMillis(virtualStart, { zone: NY }).hour < 4 ? `${DateTime.fromISO(SESSION_DATE, { zone: NY }).minus({ days: 1 }).toISODate()}T20:00` : `${SESSION_DATE}T04:00`,
+        }),
   });
   await fake.start();
 
@@ -186,6 +200,8 @@ async function main(): Promise<void> {
     ALPACA_DATA_STREAM_URL: fake.wsUrl,
     ALPACA_OPTIONS_FEED: 'opra',
     ALPACA_WORKER_SET: SET,
+    ALPACA_SESSIONS: SESSIONS,
+    ALPACA_STOCK_FEED: SESSIONS === 'regular' ? undefined : 'sip',
     SESSION_SECRET: 'demo-harness-session-secret-not-for-production',
     DATABASE_URL: 'pglite://memory', // the harness passes its own in-memory database below
     MAX_POSITION_SIZE: '5000',
@@ -265,7 +281,7 @@ async function main(): Promise<void> {
     '  This is NOT paper trading on Alpaca and NOT live trading. No real broker is contacted.',
     `  open        ${PUBLIC_URL}`,
     SETUP ? `  first run   create your account in the browser with setup code ${app.setupCode}` : `  sign in     ${USER} / ${PASSWORD}`,
-    `  session     ${SESSION_DATE} from ${START} New York (virtual clock, real-time speed)`,
+    `  session     ${SESSION_DATE} from ${START} New York (virtual clock, real-time speed)${SESSIONS === 'regular' ? '' : ` · trading ${SESSIONS} sessions (the fake enforces Alpaca's limit-only, extended-hours rules)`}`,
     `  autotrade   ${AUTOTRADE ? 'ON (fake account)' : 'off — set DEMO_AUTOTRADE=1 to watch workers trade'}`,
     '',
   ];

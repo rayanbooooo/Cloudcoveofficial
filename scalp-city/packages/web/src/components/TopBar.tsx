@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Api, ApiError } from '../lib/api';
-import { age, countdown, humanize, timeET } from '../lib/format';
+import { age, countdown, dayHmET, humanize, timeET } from '../lib/format';
+import { sessionWords } from '../lib/sessions';
 import { autotradingState, isFault } from '../lib/status';
 import { serverNow, useStore } from '../store/store';
 import { Btn, cx, Dot, Toggle } from './ui';
@@ -56,9 +57,18 @@ export function StatusChips() {
   const latency = ages.length ? Math.max(...ages) : null;
   const dataConnected = md.stock.state === 'CONNECTED';
   const anyStale = Object.values(md.symbols).some((s) => s.stale);
-  const dataLabel = !dataConnected ? md.stock.state : !md.stockRealtime ? 'DELAYED' : m.isOpen && anyStale ? 'STALE' : 'LIVE';
-  const dataStatus = !dataConnected ? 'error' : !md.stockRealtime || (m.isOpen && anyStale) ? 'warn' : 'ok';
-  const marketCountdown = m.isOpen ? (m.sessionClose ? countdown(m.sessionClose - now) : '') : m.nextOpen ? countdown(m.nextOpen - now) : '';
+  // The free plan's overnight feed: quotes in real time, trades (so bars, so signals) 15 minutes late.
+  const quotesOnly = md.stockFeed === 'overnight';
+  const dataLabel = !dataConnected ? md.stock.state : !md.stockRealtime ? 'DELAYED' : quotesOnly ? 'QUOTES ONLY' : m.isOpen && anyStale ? 'STALE' : 'LIVE';
+  const dataStatus = !dataConnected ? 'error' : !md.stockRealtime || quotesOnly || (m.isOpen && anyStale) ? 'warn' : 'ok';
+  // Open: time to the end of the trading run (the 16:00 close, 20:00, or the weekend under overnight trading: a
+  // moment that far off reads better as a weekday and time than as 109 hours).
+  const marketCountdown = m.isOpen ? (m.nextClose ? countdown(m.nextClose - now) : '') : m.nextOpen ? countdown(m.nextOpen - now) : '';
+  const marketNote = m.isOpen
+    ? m.nextClose && m.nextClose - now > 12 * 3_600_000
+      ? `until ${dayHmET(m.nextClose)}`
+      : `closes ${marketCountdown}`
+    : `opens ${marketCountdown}`;
   return (
     <div className="flex min-w-0 items-center">
       <Chip label="Broker" title={b.lastError ?? undefined}>
@@ -66,10 +76,10 @@ export function StatusChips() {
         <span className={cx('label-strong text-[10.5px]', brokerOk ? 'text-fg' : 'text-put')}>{humanize(b.status)}</span>
         {b.accountMasked && <span className="num text-[11px] text-fg-3">{b.accountMasked}</span>}
       </Chip>
-      <Chip label={system.venue === 'oanda' ? 'Session' : 'Market'} title={system.venue === 'oanda' ? 'The trading window workers use (New York time). OANDA markets themselves trade around the clock.' : undefined}>
+      <Chip label={system.venue === 'oanda' ? 'Session' : 'Market'} title={system.venue === 'oanda' ? 'The trading window workers use (New York time). OANDA markets themselves trade around the clock.' : `Workers trade ${sessionWords(m)}.`}>
         <Dot status={m.isOpen ? 'ok' : 'off'} />
         <span className={cx('label-strong text-[10.5px]', m.isOpen ? 'text-fg' : 'text-fg-2')}>{system.venue === 'oanda' ? (m.isOpen ? 'OPEN' : 'CLOSED') : humanize(m.label)}</span>
-        {marketCountdown && <span className="num text-[11px] text-fg-3">{m.isOpen ? `closes ${marketCountdown}` : `opens ${marketCountdown}`}</span>}
+        {marketCountdown && <span className="num text-[11px] text-fg-3">{marketNote}</span>}
       </Chip>
       <Chip label="Data" title={`${md.stockFeedLabel}${md.stockPartialVolume ? ' — IEX carries only part of consolidated volume' : ''}`}>
         <Dot status={dataStatus} pulse={dataStatus === 'ok' && m.isOpen} />

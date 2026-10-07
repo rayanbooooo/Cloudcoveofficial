@@ -1,5 +1,6 @@
 import type { HaltReason, SymbolQuoteView, SystemView, WorkerView } from '@scalp-city/shared';
 import { age, countdown, hmET } from './format';
+import { sessionWords } from './sessions';
 
 /**
  * Why a worker is not placing an order right now, in plain words, from the state the server already
@@ -35,16 +36,19 @@ export function signalIsStale(w: WorkerView, system: SystemView, now: number): b
   return t !== null && now - t > 3 * timeframeMs(w.config.timeframe) + 5_000;
 }
 
-const MARKET_WORDS: Record<string, string> = { PRE_MARKET: 'pre-market', AFTER_HOURS: 'after hours', HOLIDAY: 'holiday', CLOSED: 'closed', UNKNOWN: 'status unknown' };
+const MARKET_WORDS: Record<string, string> = { PRE_MARKET: 'pre-market', AFTER_HOURS: 'after hours', OVERNIGHT: 'overnight', HOLIDAY: 'holiday', UNKNOWN: 'status unknown' };
 
 function marketBlocker(system: SystemView, now: number): Blocker {
   const m = system.market;
   const opens = m.nextOpen !== null ? `Opens in ${countdown(m.nextOpen - now)} (${hmET(m.nextOpen)} ET).` : undefined;
   if (system.venue === 'oanda') return { code: 'MARKET_CLOSED', text: 'Outside the trading window', detail: opens };
+  const policy = m.sessions ?? 'regular';
+  const word = MARKET_WORDS[m.label];
   return {
     code: 'MARKET_CLOSED',
-    text: `Market closed (${MARKET_WORDS[m.label] ?? 'closed'})`,
-    detail: `${opens ? `${opens} ` : ''}Workers trade the regular session only.`,
+    text: word ? `Market closed (${word})` : 'Market closed',
+    // Under the regular policy the other hours are a setting away: say which one, rather than leave it a mystery.
+    detail: `${opens ? `${opens} ` : ''}Workers trade ${sessionWords(m)}.${policy === 'regular' ? ' To trade other hours, set ALPACA_SESSIONS to extended or all on the server.' : ''}`,
   };
 }
 

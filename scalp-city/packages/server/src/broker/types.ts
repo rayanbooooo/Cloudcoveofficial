@@ -185,6 +185,12 @@ export interface BrokerCalendarDay {
   /** Regular session open/close (ms). */
   openMs: number;
   closeMs: number;
+  /**
+   * Extended-hours session (pre-market open to after-hours close, normally 04:00–20:00 and shorter on half days),
+   * when the broker's calendar says so. Absent: derived from the regular session.
+   */
+  extOpenMs?: number;
+  extCloseMs?: number;
 }
 
 export interface BrokerOptionContract {
@@ -233,6 +239,8 @@ export interface SubmitOrderParams {
    * position stays protected while this server is down (OANDA stopLossOnFill).
    */
   protectiveStop?: { price: number; clientOrderId: string } | null;
+  /** Placed outside the regular session (Alpaca extended hours or overnight): must be a day/GTC limit order. */
+  extendedHours?: boolean;
 }
 
 export interface StreamStatus {

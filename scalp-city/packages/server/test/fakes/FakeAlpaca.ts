@@ -33,7 +33,27 @@ export interface FakeAlpacaOptions {
   /** Price for minute index i since the session open (history before "now"). */
   historyPath?: (symbol: string, minute: number, base: number) => number;
   historyVolume?: (symbol: string, minute: number) => number;
+  /**
+   * Alpaca's 24/5 session rules. Off by default, so tests that do not care keep the simple fake.
+   *  - Only the regular session (09:30–16:00) takes market orders, stop orders and options.
+   *  - Pre-market (04:00–09:30), after-hours (16:00–20:00) and overnight (Sunday 20:00 to Friday 20:00) fill only LIMIT
+   *    orders sent with extended_hours:true; any other order is accepted and waits for the regular session.
+   *  - Each data feed carries its own hours: iex 08:00–17:00, sip 04:00–20:00, overnight/boats 20:00–04:00.
+   *  - The fake's calendar has no holidays: every weekday is a trading day.
+   */
+  sessions?: boolean;
+  /** NY wall-clock time of the first synthetic history bar, 'YYYY-MM-DDTHH:mm' (default: the session open). */
+  historyFrom?: string;
+  /** Data plan (with `sessions`): 'basic' refuses the sip and boats feeds (403 REST, 409 stream); 'plus' allows every feed. Default 'plus'. */
+  dataPlan?: 'basic' | 'plus';
+  /**
+   * How far behind real time the TRADES and BARS of the derived `overnight` feed (the free plan's) run; its quotes are
+   * real time. Alpaca documents 15 minutes, the default. `boats` (the paid plan's feed) is never delayed.
+   */
+  overnightDelayMs?: number;
 }
+
+export type FakeSession = 'regular' | 'pre' | 'post' | 'night' | 'closed';
 
 interface FakeOrder {
   id: string;
@@ -55,6 +75,7 @@ interface FakeOrder {
   submitted_at: number;
   filled_at: number | null;
   canceled_at: number | null;
+  extended_hours: boolean;
 }
 
 interface FakePosition {
@@ -78,6 +99,8 @@ interface RawBar {
 interface DataClient {
   ws: WebSocket;
   kind: 'stock' | 'options';
+  /** iex | sip | delayed_sip | overnight | boats (stock streams). */
+  feed: string | null;
   authed: boolean;
   trades: Set<string>;
   quotes: Set<string>;
@@ -112,6 +135,8 @@ export class FakeAlpaca {
   private autopilot: NodeJS.Timeout | null = null;
   readonly sessionOpenMs: number;
   readonly sessionCloseMs: number;
+  private readonly openMinute: number;
+  private readonly closeMinute: number;
 
   constructor(private readonly o: FakeAlpacaOptions) {
     this.startEquity = o.startingCash ?? 100_000;
@@ -122,6 +147,8 @@ export class FakeAlpaca {
     const [ch, cm] = close.split(':').map(Number);
     this.sessionOpenMs = DateTime.fromISO(o.sessionDate, { zone: NY }).set({ hour: oh, minute: om }).toMillis();
     this.sessionCloseMs = DateTime.fromISO(o.sessionDate, { zone: NY }).set({ hour: ch, minute: cm }).toMillis();
+    this.openMinute = oh! * 60 + om!;
+    this.closeMinute = ch! * 60 + cm!;
     for (const [sym, price] of Object.entries(o.symbols)) {
       this.prices.set(sym, { bid: r2(price - 0.01), ask: r2(price + 0.01), last: price });
       this.buildHistory(sym, price);
@@ -140,8 +167,12 @@ export class FakeAlpaca {
     const nowMin = Math.floor(this.now() / 60_000) * 60_000;
     const path = this.o.historyPath ?? ((_s, i, b) => b + Math.sin(i / 7) * 0.4 + i * 0.002);
     const vol = this.o.historyVolume ?? (() => 10_000);
+    const from = this.o.historyFrom ? DateTime.fromISO(this.o.historyFrom, { zone: NY }).toMillis() : this.sessionOpenMs;
+    // Without session rules the history is the regular session so far; with them it runs up to now, whatever the hour.
+    const until = this.o.historyFrom || this.o.sessions ? nowMin : Math.min(nowMin, this.sessionCloseMs);
     let prev = path(symbol, 0, base);
-    for (let t = this.sessionOpenMs, i = 0; t < nowMin && t < this.sessionCloseMs; t += 60_000, i++) {
+    for (let t = from, i = 0; t < until; t += 60_000, i++) {
+      if (this.o.sessions && this.sessionAt(t) === 'closed') continue;
       const c = path(symbol, i, base);
       const o = prev;
       const h = Math.max(o, c) + 0.05;
@@ -152,6 +183,59 @@ export class FakeAlpaca {
     this.history.set(symbol, bars);
     const last = bars[bars.length - 1];
     if (last) this.prices.set(symbol, { bid: r2(last.c - 0.01), ask: r2(last.c + 0.01), last: last.c });
+  }
+
+  // ── Sessions and data coverage ──────────────────────────────────────────
+
+  /** Which part of Alpaca's 24/5 week an instant is in. Weekdays only; the fake has no holidays. */
+  sessionAt(t: number): FakeSession {
+    const l = DateTime.fromMillis(t, { zone: NY });
+    const m = l.hour * 60 + l.minute;
+    const wd = l.weekday; // 1 Monday … 7 Sunday
+    if (wd <= 5 && m >= this.openMinute && m < this.closeMinute) return 'regular';
+    if (wd <= 5 && m >= 240 && m < this.openMinute) return 'pre';
+    if (wd <= 5 && m >= this.closeMinute && m < 1200) return 'post';
+    // The overnight session runs from 20:00 on Sunday to Thursday until 04:00 the next weekday morning.
+    if (m >= 1200 && (wd === 7 || wd <= 4)) return 'night';
+    if (m < 240 && wd >= 1 && wd <= 5) return 'night';
+    return 'closed';
+  }
+
+  /** Does a data feed carry anything at `t`? What the plans cover: iex 08:00–17:00, sip 04:00–20:00, overnight/boats 20:00–04:00. */
+  feedCarries(feed: string | null, t: number): boolean {
+    if (!this.o.sessions || !feed) return true;
+    const l = DateTime.fromMillis(t, { zone: NY });
+    const m = l.hour * 60 + l.minute;
+    const s = this.sessionAt(t);
+    switch (feed) {
+      case 'iex':
+        return (s === 'pre' || s === 'regular' || s === 'post') && m >= 480 && m < 1020;
+      case 'sip':
+      case 'delayed_sip':
+        return s === 'pre' || s === 'regular' || s === 'post';
+      case 'overnight':
+      case 'boats':
+        return s === 'night';
+      default:
+        return true;
+    }
+  }
+
+  /** The latest minute at or before `t` that a feed carried data (what a snapshot reports as the last trade). */
+  private lastCovered(feed: string | null, t: number): number {
+    if (!this.o.sessions || this.feedCarries(feed, t)) return t;
+    let m = Math.floor(t / 60_000) * 60_000;
+    for (let i = 0; i < 6 * 24 * 60; i++, m -= 60_000) if (this.feedCarries(feed, m)) return m + 59_000;
+    return t;
+  }
+
+  /** How late a feed's trades and bars run: the derived `overnight` feed only. */
+  private tradeLag(feed: string | null): number {
+    return this.o.sessions && feed === 'overnight' ? (this.o.overnightDelayMs ?? 15 * 60_000) : 0;
+  }
+
+  private planAllows(feed: string | null): boolean {
+    return !(this.o.sessions && (this.o.dataPlan ?? 'plus') === 'basic' && (feed === 'sip' || feed === 'boats'));
   }
 
   private buildContracts(symbol: string, price: number): void {
@@ -282,7 +366,7 @@ export class FakeAlpaca {
       }
       if (p === '/v2/clock') {
         const now = this.now();
-        const isOpen = now >= this.sessionOpenMs && now < this.sessionCloseMs;
+        const isOpen = this.o.sessions ? this.sessionAt(now) === 'regular' : now >= this.sessionOpenMs && now < this.sessionCloseMs;
         return send(200, {
           timestamp: DateTime.fromMillis(now, { zone: NY }).toISO(),
           is_open: isOpen,
@@ -305,21 +389,30 @@ export class FakeAlpaca {
         const symbols = (q.get('symbols') ?? '').split(',').filter(Boolean);
         const start = Date.parse(q.get('start') ?? '1970-01-01');
         const end = Date.parse(q.get('end') ?? new Date(this.now()).toISOString());
+        const feed = q.get('feed');
+        if (!this.planAllows(feed)) return send(403, { message: `subscription does not permit querying recent ${feed === 'boats' ? 'BOATS' : 'SIP'} data` });
+        // Historical overnight data is asked for as `boats` (delayed on the free plan); `overnight` is refused.
+        if (this.o.sessions && feed === 'overnight') return send(400, { code: 40010000, message: 'feed overnight is not supported for historical data; use boats' });
         const out: Record<string, unknown[]> = {};
         for (const s of symbols) {
-          out[s] = (this.history.get(s) ?? []).filter((b) => b.t >= start && b.t <= end).map((b) => ({ ...b, t: new Date(b.t).toISOString() }));
+          out[s] = (this.history.get(s) ?? []).filter((b) => b.t >= start && b.t <= end && this.feedCarries(feed, b.t)).map((b) => ({ ...b, t: new Date(b.t).toISOString() }));
         }
         return send(200, { bars: out, next_page_token: null });
       }
       if (p === '/v2/stocks/snapshots') {
         const symbols = (q.get('symbols') ?? '').split(',').filter(Boolean);
+        const feed = q.get('feed');
+        if (!this.planAllows(feed)) return send(403, { message: `subscription does not permit querying recent ${feed === 'boats' ? 'BOATS' : 'SIP'} data` });
         const out: Record<string, unknown> = {};
-        const iso = new Date(this.now()).toISOString();
+        // A feed that carries nothing at this hour reports the last print it did carry, with that print's own time.
+        const covered = this.lastCovered(feed, this.now());
+        const quoteIso = new Date(covered).toISOString();
+        const tradeIso = new Date(covered - this.tradeLag(feed)).toISOString();
         for (const s of symbols) {
           const pr = this.prices.get(s);
           if (!pr) continue;
           const first = this.history.get(s)?.[0];
-          out[s] = { latestTrade: { p: pr.last, s: 100, t: iso }, latestQuote: { bp: pr.bid, ap: pr.ask, bs: 3, as: 3, t: iso }, prevDailyBar: { c: first ? first.o : pr.last } };
+          out[s] = { latestTrade: { p: pr.last, s: 100, t: tradeIso }, latestQuote: { bp: pr.bid, ap: pr.ask, bs: 3, as: 3, t: quoteIso }, prevDailyBar: { c: first ? first.o : pr.last } };
         }
         return send(200, out);
       }
@@ -469,7 +562,7 @@ export class FakeAlpaca {
       limit_price: o.limit_price === null ? null : String(o.limit_price),
       stop_price: o.stop_price === null ? null : String(o.stop_price),
       status: o.status,
-      extended_hours: false,
+      extended_hours: o.extended_hours,
       position_intent: o.position_intent,
     };
   }
@@ -488,6 +581,13 @@ export class FakeAlpaca {
     if (!isOption && !this.prices.has(b.symbol)) return send(422, { code: 40010001, message: `asset "${b.symbol}" not found` });
     const qty = Number(b.qty);
     if (!Number.isInteger(qty) || qty <= 0) return send(422, { code: 40010001, message: 'qty must be a positive integer' });
+    if (this.o.sessions) {
+      // What Alpaca refuses outright; anything else that is not allowed right now is accepted and waits (see eligible()).
+      if (b.extended_hours === true && (b.type !== 'limit' || !['day', 'gtc'].includes(b.time_in_force))) {
+        return send(422, { code: 42210000, message: 'extended hours orders must be limit orders with time_in_force day or gtc' });
+      }
+      if (isOption && this.sessionAt(this.now()) !== 'regular') return send(422, { code: 42210000, message: 'options orders are only accepted during regular trading hours' });
+    }
     const now = this.now();
     const o: FakeOrder = {
       id: randomUUID(),
@@ -509,6 +609,7 @@ export class FakeAlpaca {
       submitted_at: now,
       filled_at: null,
       canceled_at: null,
+      extended_hours: b.extended_hours === true,
     };
     if (o.side === 'buy') {
       const px = this.executable(o) ?? o.limit_price ?? 0;
@@ -541,8 +642,17 @@ export class FakeAlpaca {
     return null;
   }
 
+  /** May this order execute now under the session rules? Regular session: any order. Otherwise only an extended-hours limit order on a share. */
+  private eligible(o: FakeOrder): boolean {
+    if (!this.o.sessions) return true;
+    const s = this.sessionAt(this.now());
+    if (s === 'regular') return true;
+    if (o.asset_class === 'us_option') return false;
+    return o.extended_hours && o.type === 'limit' && (s === 'pre' || s === 'post' || s === 'night');
+  }
+
   tryFill(o: FakeOrder): void {
-    if (this.fillMode !== 'immediate' || !['new', 'accepted', 'partially_filled'].includes(o.status)) return;
+    if (this.fillMode !== 'immediate' || !['new', 'accepted', 'partially_filled'].includes(o.status) || !this.eligible(o)) return;
     const px = this.executable(o);
     if (px === null) return;
     this.fill(o, o.qty - o.filled_qty, px);
@@ -592,9 +702,11 @@ export class FakeAlpaca {
 
   private handleWs(ws: WebSocket, path: string): void {
     if (path === '/stream') return this.handleTradeStream(ws);
-    const kind = path.startsWith('/v2/') ? 'stock' : path.startsWith('/v1beta1/') ? 'options' : null;
+    // Stock feeds: /v2/{iex|sip|delayed_sip} and the overnight pair /v1beta1/{overnight|boats}. Options: /v1beta1/{opra|indicative}.
+    const feed = /^\/v2\/([a-z_]+)$/.exec(path)?.[1] ?? /^\/v1beta1\/(overnight|boats)$/.exec(path)?.[1] ?? null;
+    const kind = feed ? 'stock' : path.startsWith('/v1beta1/') ? 'options' : null;
     if (!kind) return ws.close(4004, 'unknown path');
-    const client: DataClient = { ws, kind, authed: false, trades: new Set(), quotes: new Set(), bars: new Set() };
+    const client: DataClient = { ws, kind, feed, authed: false, trades: new Set(), quotes: new Set(), bars: new Set() };
     this.dataClients.add(client);
     ws.on('close', () => this.dataClients.delete(client));
     const reply = (msgs: unknown[]) => ws.send(encode(msgs));
@@ -607,10 +719,12 @@ export class FakeAlpaca {
         return reply([{ T: 'error', code: 400, msg: 'invalid syntax' }]);
       }
       if (m.action === 'auth') {
-        if (m.key === this.o.keyId && m.secret === this.o.secretKey) {
+        if (m.key !== this.o.keyId || m.secret !== this.o.secretKey) reply([{ T: 'error', code: 402, msg: 'auth failed' }]);
+        else if (!this.planAllows(client.feed)) reply([{ T: 'error', code: 409, msg: 'insufficient subscription' }]);
+        else {
           client.authed = true;
           reply([{ T: 'success', msg: 'authenticated' }]);
-        } else reply([{ T: 'error', code: 402, msg: 'auth failed' }]);
+        }
         return;
       }
       if (!client.authed) return reply([{ T: 'error', code: 401, msg: 'not authenticated' }]);
@@ -653,8 +767,13 @@ export class FakeAlpaca {
 
   private publish(kind: 'stock' | 'options', channel: 'trades' | 'quotes' | 'bars', symbol: string, msg: Record<string, unknown>): void {
     const buf = encode([msg]);
+    const at = msg.t instanceof Date ? msg.t.getTime() : this.now();
     for (const c of this.dataClients) {
-      if (c.kind === kind && c.authed && c[channel].has(symbol) && c.ws.readyState === WebSocket.OPEN) c.ws.send(buf);
+      if (c.kind !== kind || !c.authed || !c[channel].has(symbol) || c.ws.readyState !== WebSocket.OPEN) continue;
+      // A feed only carries the hours its plan covers (stock streams only).
+      if (kind === 'stock' && !this.feedCarries(c.feed, this.now())) continue;
+      const lag = channel === 'trades' || channel === 'bars' ? this.tradeLag(c.feed) : 0;
+      c.ws.send(lag > 0 && msg.t instanceof Date ? encode([{ ...msg, t: new Date(at - lag) }]) : buf);
     }
   }
 

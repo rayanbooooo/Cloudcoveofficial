@@ -240,6 +240,59 @@ previous copy finishes. The app says so and reconnects by itself; just wait.
 - **FXB and FXE** trade little and their spreads are wide against a 1-minute move: expect "spread too wide" and
   stale-data blocks there; most of the action will be GLD, QQQ and DIA.
 
+### B3a. Every session: pre-market, after-hours, overnight
+
+`ALPACA_SESSIONS` (Render → Environment; the blueprint sets `all`) decides which hours the scalpers trade, New York time:
+
+| Setting | Trades |
+|---|---|
+| `regular` | 09:30–16:00 |
+| `extended` | 04:00–20:00: pre-market, regular and after-hours |
+| `all` | also the overnight session: Sunday 20:00 to Friday 20:00 without a break (Monday 02:00 to Saturday 02:00 in Belgium, except for the few weeks a year when the US and Europe change their clocks on different days) |
+
+After changing it, **Manual Deploy**. The switches (Autotrading, each worker) are off again after a deploy; turn them on.
+
+- **Orders at those hours.** Alpaca takes only **limit orders** outside 09:30–16:00. Entries already are. Exits that
+  would be market orders (stop loss, end of day, FLATTEN ALL, the kill switch, a manual close) become limit orders
+  priced 0.5% through the touch (`ALPACA_OFFHOURS_EXIT_BUFFER_PCT`): they fill at the book's prices like a market
+  order, and 0.5% is the most they can be worse than the quote they were priced from. The app never sends an
+  opening market order or an options order at those hours; it refuses them and says why.
+- **Prices decide whether it can trade at all.** A worker enters only on a price that is fresh *for that hour* (30 s
+  old at most outside the regular session). What exists depends on your Alpaca data plan:
+
+  | New York time | Free plan (`ALPACA_STOCK_FEED=iex`) | Paid plan (`ALPACA_STOCK_FEED=sip`) |
+  |---|---|---|
+  | 04:00–08:00 | no data | SIP |
+  | 08:00–17:00 | IEX | SIP |
+  | 17:00–20:00 | no data | SIP |
+  | 20:00–04:00 | `overnight` feed: quotes real time, **trades 15 minutes late** | `boats` feed, real time |
+
+  **The honest summary for the free plan: `all` adds only the IEX hours around the regular session** (08:00–09:30 and
+  16:00–17:00 New York, 14:00–15:30 and 22:00–23:00 in Belgium), with the thin books those hours have. The free
+  overnight feed is derived from BOATS and delivers trades 15 minutes late, so the bars and signals built from it are
+  old news: the app refuses to enter on it (risk check "Live bars", data chip `QUOTES ONLY`). To trade the early
+  morning, the evening and the night you need Alpaca's paid data plan: set `ALPACA_STOCK_FEED=sip` (the overnight feed
+  then follows: `boats`). If your plan does not include the feed asked for, the Health drawer says so (the stream is
+  refused); the fix is a different `ALPACA_OVERNIGHT_FEED`, or `ALPACA_SESSIONS=extended`.
+  The free IEX feed also goes quiet at 17:00, so there are no entries in the last 10 minutes before it ("Data
+  hours") and a position is closed 5 minutes before: nothing is left without a price overnight.
+- **Thin markets wait.** Outside the regular session a worker needs four 1-minute bars in a row, each with a trade in
+  it, before it enters (risk check "Unbroken bars"). A quiet night therefore means few trades, which is the point: a
+  move measured over bars with holes in them is not a move.
+- **"Today" is the trading day.** Under `all` it runs 04:00 to 04:00 New York time, so trades per day and a worker's daily
+  goal and loss limit do not start over at midnight in the middle of the night. The account-level daily-loss limit uses
+  Alpaca's own day P&L.
+- **No weekend risk.** Everything is flattened 5 minutes before the end of the unbroken run of trading time (20:00 each
+  day under `extended`; Friday 20:00, or the evening before a holiday or an early close, under `all`), and there are
+  no entries in the last 10 minutes of it.
+- **What can go wrong that the day does not show.** Overnight books are thin: spreads are wide (so you will see
+  "spread too wide" blocks), prices jump, and a limit order through the touch can fill worse than the quote in a fast
+  move. Alpaca may refuse something at night that it accepts by day (short selling, for one); a refusal shows on the
+  order, and three in ten minutes trip the REJECTED ORDERS breaker, which you reset in the Risk drawer once you know why.
+- **Not yet run against real Alpaca.** It has been exercised against a fake that enforces Alpaca's session rules and
+  each feed's hours. Run **paper** through at least one night with the Health drawer open and read what Alpaca
+  actually did before this goes anywhere near real money.
+
 ### B3b. The patient ETF set, and what protects you
 
 `ALPACA_WORKER_SET=etf` runs the same five markets with the six-condition strategy (a few trades a day, long only).

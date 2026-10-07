@@ -115,6 +115,7 @@ export function age(ms: number | null | undefined): string {
 const etTime = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
 const etShort = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', hour: '2-digit', minute: '2-digit', hour12: false });
 const etDate = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: 'short', day: '2-digit' });
+const etDayHm = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', weekday: 'short', hour: '2-digit', minute: '2-digit', hour12: false });
 const etDateTime = new Intl.DateTimeFormat('en-US', { timeZone: 'America/New_York', month: 'short', day: '2-digit', hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false });
 
 /** Times are shown in exchange time (New York). */
@@ -125,6 +126,11 @@ export function timeET(ts: number | null | undefined): string {
 export function hmET(ts: number | null | undefined): string {
   if (!ts) return '—';
   return etShort.format(ts);
+}
+/** "Fri 20:00": a moment further off than a countdown reads well, in New York time. */
+export function dayHmET(ts: number | null | undefined): string {
+  if (!ts) return '—';
+  return etDayHm.format(ts).replace(',', '');
 }
 export function dateET(ts: number | null | undefined): string {
   if (!ts) return '—';

@@ -1,6 +1,7 @@
 import { useEffect, useRef, type RefObject } from 'react';
 import type { Bar } from '@scalp-city/shared';
 import { Api } from '../../lib/api';
+import { barInTradedWindow } from '../../lib/sessions';
 import { onBars, useStore } from '../../store/store';
 
 export interface LiveBars {
@@ -38,7 +39,7 @@ export function useLiveBars(symbol: string, keep = 90): RefObject<LiveBars> {
     const off = onBars(symbol, (updates) => {
       const m = useStore.getState().system?.market;
       for (const b of updates) {
-        if (m && m.sessionOpen !== null && (b.t < m.sessionOpen || (m.sessionClose !== null && b.t >= m.sessionClose))) continue;
+        if (!barInTradedWindow(m, b.t)) continue;
         byTime.set(b.t, b);
       }
       // A live update before the history arrived is kept, but the status stays 'loading' until it does.

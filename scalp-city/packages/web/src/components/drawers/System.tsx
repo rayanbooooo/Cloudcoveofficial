@@ -157,7 +157,10 @@ export function HealthDrawerBody() {
         )}
       </section>
       <section>
-        <div className="label mb-1.5">Data freshness (max {age(md.maxDataAgeMs)})</div>
+        <div className="label mb-1.5">
+          Data freshness (max {age(md.maxDataAgeMs)}
+          {system.venue === 'alpaca' && system.market.sessions !== 'regular' && md.offHoursMaxDataAgeMs > md.maxDataAgeMs ? `, ${age(md.offHoursMaxDataAgeMs)} outside 09:30–16:00` : ''})
+        </div>
         {Object.entries(md.symbols).map(([sym, v]) => (
           <Row key={sym} label={instrumentName(sym)}>
             <span className={v.stale ? 'text-pending' : 'text-call'}>{v.stale ? 'STALE' : 'LIVE'}</span> <span className="text-fg-2">{age(v.ageMs)}</span>
@@ -165,7 +168,7 @@ export function HealthDrawerBody() {
         ))}
         <div className="label mt-2">
           {md.stockFeedLabel}
-          {system.venue === 'oanda' ? ' · mid of bid/ask · volume = tick count' : usesOptions ? ` · ${md.optionsFeedLabel}${md.optionsBlockReason ? ` · ${md.optionsBlockReason}` : ''}` : ' · IEX shows only part of the market volume, so VWAP and volume are IEX-only'}
+          {system.venue === 'oanda' ? ' · mid of bid/ask · volume = tick count' : usesOptions ? ` · ${md.optionsFeedLabel}${md.optionsBlockReason ? ` · ${md.optionsBlockReason}` : ''}` : md.stockPartialVolume ? ' · this feed shows only part of the market volume, so VWAP and volume are computed from that part only' : ''}
         </div>
       </section>
       <section>
@@ -174,6 +177,7 @@ export function HealthDrawerBody() {
         <Row label="Skew vs broker">
           <span className={system.clock.ok ? 'text-call' : 'text-put'}>{system.clock.brokerSkewMs === null ? 'not verified' : `${system.clock.brokerSkewMs}ms`}</span>
         </Row>
+        {system.venue === 'alpaca' && <Row label="Trading hours">{system.market.sessions === 'all' ? 'all sessions' : system.market.sessions === 'extended' ? 'extended hours' : 'regular session'}</Row>}
         <Row label="Phase">{humanize(system.phase)}</Row>
         <div className="label mt-1">{system.phaseDetail}</div>
       </section>
