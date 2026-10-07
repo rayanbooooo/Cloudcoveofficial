@@ -1,0 +1,282 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trading Command Center</title>
+<style>
+  :root{--bg:#0b0e14;--panel:#131824;--line:#222a3a;--tx:#e6e9f0;--mu:#8791a7;--ac:#4f8cff;--ok:#2ecc8f;--bad:#ff5d6c;--warn:#f5b84a}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  header{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--line)}
+  h1{font-size:16px;margin:0;letter-spacing:.3px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:14px;padding:16px;max-width:1300px;margin:auto}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px}
+  .card h2{font-size:12px;text-transform:uppercase;letter-spacing:1px;color:var(--mu);margin:0 0 10px}
+  label{display:block;font-size:12px;color:var(--mu);margin:8px 0 3px}
+  input,select,button{font:inherit;color:var(--tx);background:#0e1320;border:1px solid var(--line);border-radius:6px;padding:7px 9px;width:100%}
+  button{cursor:pointer;background:var(--ac);border-color:var(--ac);font-weight:600;width:auto}
+  button.ghost{background:transparent;border-color:var(--line);color:var(--mu)}
+  button:disabled{opacity:.4;cursor:not-allowed}
+  .row{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+  .big{font-size:26px;font-weight:700}
+  .mu{color:var(--mu)} .ok{color:var(--ok)} .bad{color:var(--bad)} .warn{color:var(--warn)}
+  .banner{padding:10px 12px;border-radius:8px;margin-bottom:10px;font-weight:600}
+  .banner.lock{background:#3a1218;border:1px solid var(--bad);color:var(--bad)}
+  .banner.good{background:#0f2a20;border:1px solid var(--ok);color:var(--ok)}
+  .banner.caution{background:#33270d;border:1px solid var(--warn);color:var(--warn)}
+  .sess{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+  .sess div{padding:8px;border:1px solid var(--line);border-radius:8px;text-align:center;font-size:12px}
+  .sess .on{border-color:var(--ok);color:var(--ok);background:#0f2a20}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  td,th{padding:5px 4px;border-bottom:1px solid var(--line);text-align:left}
+  th{color:var(--mu);font-weight:500;font-size:11px;text-transform:uppercase}
+  .chk label{display:flex;gap:8px;align-items:flex-start;color:var(--tx);font-size:13px;margin:6px 0}
+  .chk input{width:auto;margin-top:3px}
+  .stats{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+  .stats div{background:#0e1320;border:1px solid var(--line);border-radius:8px;padding:8px}
+  .stats b{display:block;font-size:18px}
+  .small{font-size:12px}
+  .wide{grid-column:1/-1}
+</style>
+</head>
+<body>
+<header>
+  <h1>TRADING COMMAND CENTER</h1>
+  <div class="mu small" id="clock"></div>
+</header>
+
+<div class="grid">
+
+  <section class="card wide">
+    <h2>Market sessions (UTC-based)</h2>
+    <div class="sess" id="sessions"></div>
+    <div class="small mu" id="sessNote" style="margin-top:8px"></div>
+  </section>
+
+  <section class="card">
+    <h2>Guardrails</h2>
+    <div id="guardBanner"></div>
+    <div class="row">
+      <div><label>Account balance ($)</label><input id="bal" type="number" value="10000" min="0"></div>
+      <div><label>Risk per trade (%)</label><input id="riskPct" type="number" value="0.5" step="0.1" min="0.05"></div>
+      <div><label>Max daily loss (%)</label><input id="maxLoss" type="number" value="2" step="0.5" min="0.5"></div>
+      <div><label>Max trades / day</label><input id="maxTrades" type="number" value="3" min="1"></div>
+    </div>
+    <div class="small mu" style="margin-top:8px" id="guardStats"></div>
+  </section>
+
+  <section class="card chk">
+    <h2>Pre-trade checklist (all required)</h2>
+    <label><input type="checkbox" class="ck"> It's a setup from my written plan, not a feeling</label>
+    <label><input type="checkbox" class="ck"> Stop is at the invalidation level, not "what I can afford"</label>
+    <label><input type="checkbox" class="ck"> Reward:risk is at least 1.5 to 1</label>
+    <label><input type="checkbox" class="ck"> No high-impact news in the next 30 minutes</label>
+    <label><input type="checkbox" class="ck"> I'm not revenge trading, bored, or tilted</label>
+    <button class="ghost" id="ckReset" style="margin-top:6px">Reset checklist</button>
+  </section>
+
+  <section class="card">
+    <h2>Position size calculator</h2>
+    <div class="row">
+      <div><label>Instrument</label><select id="inst"></select></div>
+      <div><label>Direction</label><select id="dir"><option>Long</option><option>Short</option></select></div>
+      <div><label>Entry price</label><input id="entry" type="number" step="any"></div>
+      <div><label>Stop price</label><input id="stop" type="number" step="any"></div>
+      <div><label>Target price (optional)</label><input id="target" type="number" step="any"></div>
+      <div id="convWrap" style="display:none"><label id="convLbl">Quote to USD rate</label><input id="conv" type="number" step="any"></div>
+    </div>
+    <div id="calcOut" style="margin-top:12px"></div>
+    <button id="logBtn" style="margin-top:10px" disabled>Take trade (counts toward daily limit)</button>
+  </section>
+
+  <section class="card">
+    <h2>Live watchlist</h2>
+    <div class="small mu" style="margin-bottom:6px">Free feed: Twelve Data (API key stays in your browser only). Free tier is 8 symbols, 1 refresh/min.</div>
+    <div class="row">
+      <div><label>API key</label><input id="apiKey" type="password" placeholder="twelvedata.com key"></div>
+      <div><label>Symbols (comma separated)</label><input id="symbols" value="EUR/USD,GBP/USD,USD/JPY,AUD/USD,USD/CAD,XAU/USD"></div>
+    </div>
+    <button id="wlGo" style="margin-top:8px">Start feed</button>
+    <table id="wl" style="margin-top:8px"><thead><tr><th>Symbol</th><th>Price</th><th></th></tr></thead><tbody></tbody></table>
+    <div class="small mu" id="wlStatus"></div>
+  </section>
+
+  <section class="card wide">
+    <h2>Trade log and edge stats</h2>
+    <div class="stats" id="stats"></div>
+    <div class="row" style="margin-top:10px;grid-template-columns:1fr 1fr 2fr auto;align-items:end">
+      <div><label>Instrument</label><input id="lgInst" placeholder="EUR/USD"></div>
+      <div><label>Result (R, e.g. -1 or 2.3)</label><input id="lgR" type="number" step="0.1"></div>
+      <div><label>Setup / note</label><input id="lgNote" placeholder="London break + retest"></div>
+      <button id="lgAdd">Add</button>
+    </div>
+    <table style="margin-top:10px"><thead><tr><th>Date</th><th>Instrument</th><th>R</th><th>Note</th><th></th></tr></thead><tbody id="log"></tbody></table>
+  </section>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+const store = {
+  get(k, d){ try{ const v = localStorage.getItem(k); return v==null?d:JSON.parse(v); }catch(e){ return d; } },
+  set(k, v){ try{ localStorage.setItem(k, JSON.stringify(v)); }catch(e){} }
+};
+const today = () => new Date().toISOString().slice(0,10);
+
+/* ---------- instruments ---------- */
+// type fx: pip = pip size, quote ccy; base/quote used to derive quote->USD
+// type fut: tick, tickVal
+const INST = {
+  'EUR/USD':{t:'fx',pip:.0001,base:'EUR',quote:'USD'}, 'GBP/USD':{t:'fx',pip:.0001,base:'GBP',quote:'USD'},
+  'AUD/USD':{t:'fx',pip:.0001,base:'AUD',quote:'USD'}, 'NZD/USD':{t:'fx',pip:.0001,base:'NZD',quote:'USD'},
+  'USD/JPY':{t:'fx',pip:.01,base:'USD',quote:'JPY'},  'USD/CAD':{t:'fx',pip:.0001,base:'USD',quote:'CAD'},
+  'USD/CHF':{t:'fx',pip:.0001,base:'USD',quote:'CHF'},
+  'EUR/JPY':{t:'fx',pip:.01,base:'EUR',quote:'JPY'},  'GBP/JPY':{t:'fx',pip:.01,base:'GBP',quote:'JPY'},
+  'EUR/GBP':{t:'fx',pip:.0001,base:'EUR',quote:'GBP'},'AUD/NZD':{t:'fx',pip:.0001,base:'AUD',quote:'NZD'},
+  'ES':{t:'fut',tick:.25,tv:12.5},'MES':{t:'fut',tick:.25,tv:1.25},
+  'NQ':{t:'fut',tick:.25,tv:5},'MNQ':{t:'fut',tick:.25,tv:.5},
+  'GC':{t:'fut',tick:.1,tv:10},'MGC':{t:'fut',tick:.1,tv:1},
+  'CL':{t:'fut',tick:.01,tv:10},'MCL':{t:'fut',tick:.01,tv:1}
+};
+$('inst').innerHTML = Object.keys(INST).map(k=>`<option>${k}</option>`).join('');
+
+/* Size a trade. Pure function so it can be tested. Account currency = USD. */
+function sizeTrade({inst, entry, stop, target, riskUsd, conv}){
+  const d = INST[inst]; const dist = Math.abs(entry - stop);
+  if(!(dist>0)) return {err:'Stop must differ from entry'};
+  let units, unitName, stopLabel, valuePerUnit, rr=null, exactRisk;
+  if(d.t==='fx'){
+    const stopPips = dist/d.pip;
+    let q2usd;
+    if(d.quote==='USD') q2usd = 1;
+    else if(d.base==='USD') q2usd = 1/entry;
+    else { if(!(conv>0)) return {err:`Enter ${d.quote}→USD rate`}; q2usd = conv; }
+    valuePerUnit = d.pip*100000*q2usd;            // $ per pip per standard lot
+    const lots = riskUsd/(stopPips*valuePerUnit);
+    units = Math.floor(lots*100+1e-9)/100;             // round down to 0.01 lot
+    unitName='lots'; stopLabel=stopPips.toFixed(1)+' pips';
+    exactRisk = units*stopPips*valuePerUnit;
+  } else {
+    const ticks = dist/d.tick; valuePerUnit = d.tv;
+    units = Math.floor(riskUsd/(ticks*d.tv)+1e-9);
+    unitName='contracts'; stopLabel=(dist).toFixed(2)+' pts ('+ticks.toFixed(0)+' ticks)';
+    exactRisk = units*ticks*d.tv;
+  }
+  if(target && target>0){ rr = Math.abs(target-entry)/dist; }
+  return {units, unitName, stopLabel, exactRisk, rr};
+}
+window.sizeTrade = sizeTrade;
+
+/* ---------- state ---------- */
+let cfg = store.get('cfg', {bal:10000,riskPct:.5,maxLoss:2,maxTrades:3});
+let log = store.get('log', []);          // {d,inst,r,note}
+let day = store.get('day', {d:today(),trades:0,r:0});
+if(day.d!==today()) day={d:today(),trades:0,r:0};
+['bal','riskPct','maxLoss','maxTrades'].forEach(k=>{ $(k).value=cfg[k]; $(k).addEventListener('input',()=>{cfg[k]=+$(k).value; store.set('cfg',cfg); render();}); });
+
+function lockState(){
+  const lossLimitR = cfg.maxLoss/cfg.riskPct;       // daily loss limit expressed in R
+  if(day.r <= -lossLimitR) return {locked:true, why:`Daily loss limit hit (${day.r.toFixed(1)}R). Done for the day. Walk away.`};
+  if(day.trades >= cfg.maxTrades) return {locked:true, why:`Max trades reached (${day.trades}/${cfg.maxTrades}). Done for the day.`};
+  return {locked:false};
+}
+
+/* ---------- sessions ---------- */
+const SESS=[['Sydney',22,7],['Tokyo',0,9],['London',7,16],['New York',12,21]];
+function renderSessions(){
+  const n=new Date(), h=n.getUTCHours()+n.getUTCMinutes()/60;
+  const open = s => s[1]<s[2] ? (h>=s[1]&&h<s[2]) : (h>=s[1]||h<s[2]);
+  $('sessions').innerHTML = SESS.map(s=>`<div class="${open(s)?'on':''}">${s[0]}<br>${open(s)?'OPEN':'closed'}</div>`).join('');
+  const lon=open(SESS[2]), ny=open(SESS[3]);
+  $('sessNote').textContent = lon&&ny ? 'London/New York overlap: highest liquidity of the day.' : lon ? 'London open: strong trends, key range break window.' : ny ? 'New York only: liquidity fades into the close.' : 'Asia hours: typically range-bound. Fewer clean setups.';
+  $('clock').textContent = n.toUTCString().slice(17,25)+' UTC · local '+n.toLocaleTimeString();
+}
+setInterval(renderSessions,1000);
+
+/* ---------- checklist ---------- */
+const cks=[...document.querySelectorAll('.ck')];
+cks.forEach(c=>c.addEventListener('change',render));
+$('ckReset').onclick=()=>{cks.forEach(c=>c.checked=false);render();};
+
+/* ---------- calculator ---------- */
+['inst','dir','entry','stop','target','conv'].forEach(i=>$(i).addEventListener('input',render));
+function render(){
+  const g=lockState(), riskUsd=cfg.bal*cfg.riskPct/100;
+  $('guardBanner').innerHTML = g.locked ? `<div class="banner lock">${g.why}</div>`
+    : cfg.riskPct>1 ? `<div class="banner caution">Risk per trade above 1% is where accounts die. Consider 0.25–0.5%.</div>`
+    : `<div class="banner good">Clear to trade within limits.</div>`;
+  $('guardStats').innerHTML = `Today: ${day.trades}/${cfg.maxTrades} trades · ${day.r.toFixed(1)}R · risk per trade <b>$${riskUsd.toFixed(2)}</b> · loss limit <b>${(cfg.maxLoss/cfg.riskPct).toFixed(1)}R</b>`;
+
+  const inst=$('inst').value, d=INST[inst];
+  const needConv = d.t==='fx' && d.quote!=='USD' && d.base!=='USD';
+  $('convWrap').style.display = needConv?'block':'none';
+  if(needConv) $('convLbl').textContent = `${d.quote}→USD rate (e.g. price of ${d.quote}/USD)`;
+
+  const entry=+$('entry').value, stop=+$('stop').value, target=+$('target').value, dir=$('dir').value;
+  const out=$('calcOut'); $('logBtn').disabled=true;
+  if(!entry||!stop){ out.innerHTML='<span class="mu">Enter entry and stop.</span>'; renderLog(); return; }
+  if((dir==='Long'&&stop>=entry)||(dir==='Short'&&stop<=entry)){ out.innerHTML='<span class="bad">Stop is on the wrong side of entry for a '+dir.toLowerCase()+'.</span>'; renderLog(); return; }
+  const r=sizeTrade({inst,entry,stop,target,riskUsd,conv:+$('conv').value});
+  if(r.err){ out.innerHTML=`<span class="warn">${r.err}</span>`; renderLog(); return; }
+  const allChecked=cks.every(c=>c.checked);
+  const rrBad = r.rr!==null && r.rr<1.5;
+  let html='';
+  if(g.locked) html=`<div class="bad">Sizing disabled. ${g.why}</div>`;
+  else if(!allChecked) html=`<div class="warn">Complete the checklist to reveal position size.</div>`;
+  else if(r.units<=0) html=`<div class="warn">Stop is too wide for this risk budget. The minimum size would risk more than $${riskUsd.toFixed(2)}. Skip it or tighten the stop.</div>`;
+  else {
+    html=`<div class="big">${r.units} ${r.unitName}</div>
+      <div class="mu">Stop ${r.stopLabel} · actual risk <b class="tx">$${r.exactRisk.toFixed(2)}</b> (${(r.exactRisk/cfg.bal*100).toFixed(2)}%)</div>`;
+    if(r.rr!==null) html+=`<div class="${rrBad?'bad':'ok'}">R:R ${r.rr.toFixed(2)}${rrBad?' – below your 1.5 minimum, skip it':''}</div>`;
+    $('logBtn').disabled=false;
+  }
+  out.innerHTML=html; renderLog();
+}
+$('logBtn').onclick=()=>{ day.trades++; store.set('day',day); cks.forEach(c=>c.checked=false); render(); };
+
+/* ---------- trade log + stats ---------- */
+function renderLog(){
+  const rs=log.map(t=>t.r), n=rs.length;
+  const wins=rs.filter(r=>r>0), losses=rs.filter(r=>r<=0);
+  const sum=a=>a.reduce((x,y)=>x+y,0);
+  const wr=n?wins.length/n:0, aw=wins.length?sum(wins)/wins.length:0, al=losses.length?Math.abs(sum(losses)/losses.length):0;
+  const exp=n?wr*aw-(1-wr)*al:0;
+  let peak=0,eq=0,dd=0; rs.forEach(r=>{eq+=r;peak=Math.max(peak,eq);dd=Math.max(dd,peak-eq);});
+  const cell=(l,v,c='')=>`<div><span class="mu small">${l}</span><b class="${c}">${v}</b></div>`;
+  $('stats').innerHTML = cell('Trades',n)+cell('Win rate',n?(wr*100).toFixed(0)+'%':'–')+
+    cell('Expectancy (R/trade)',n?exp.toFixed(2):'–',n?(exp>0?'ok':'bad'):'')+
+    cell('Total R',n?sum(rs).toFixed(1):'–',sum(rs)>=0?'ok':'bad')+cell('Avg win / loss',n?aw.toFixed(2)+' / '+al.toFixed(2):'–')+cell('Max drawdown',n?dd.toFixed(1)+'R':'–','warn');
+  $('log').innerHTML = log.slice().reverse().slice(0,30).map((t,i)=>`<tr><td>${t.d}</td><td>${esc(t.inst)}</td><td class="${t.r>0?'ok':'bad'}">${t.r}</td><td>${esc(t.note)}</td><td><button class="ghost" data-i="${log.length-1-i}">×</button></td></tr>`).join('');
+}
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+$('log').addEventListener('click',e=>{ const b=e.target.closest('button'); if(!b) return;
+  log.splice(+b.dataset.i,1); store.set('log',log); renderLog(); });
+$('lgAdd').onclick=()=>{ const r=parseFloat($('lgR').value); if(isNaN(r)) return;
+  log.push({d:today(),inst:$('lgInst').value||'?',r,note:$('lgNote').value});
+  day.r+=r; store.set('day',day); store.set('log',log);
+  $('lgR').value=$('lgNote').value=''; render(); };
+
+/* ---------- live watchlist (Twelve Data) ---------- */
+let timer=null; $('apiKey').value=store.get('key','');
+async function poll(){
+  const key=$('apiKey').value.trim(), syms=$('symbols').value.split(',').map(s=>s.trim()).filter(Boolean).slice(0,8);
+  if(!key){ $('wlStatus').textContent='Add an API key first.'; return; }
+  try{
+    const res=await fetch('https://api.twelvedata.com/price?symbol='+encodeURIComponent(syms.join(','))+'&apikey='+encodeURIComponent(key));
+    const j=await res.json(); const rows=[];
+    const get=(s)=> syms.length===1 ? j : j[s];
+    syms.forEach(s=>{ const o=get(s); const p=o&&o.price?(+o.price):null;
+      rows.push(`<tr><td>${esc(s)}</td><td>${p?p.toFixed(s.includes('JPY')?3:5):'<span class="bad">n/a</span>'}</td><td><button class="ghost" data-s="${esc(s)}">use</button></td></tr>`); });
+    document.querySelector('#wl tbody').innerHTML=rows.join('');
+    $('wlStatus').textContent='Updated '+new Date().toLocaleTimeString();
+  }catch(e){ $('wlStatus').textContent='Feed error: '+e.message; }
+}
+document.querySelector('#wl tbody').addEventListener('click',e=>{ const b=e.target.closest('button'); if(!b) return;
+  const s=b.dataset.s; if(INST[s]) $('inst').value=s;
+  const price=b.closest('tr').children[1].textContent; if(+price) $('entry').value=price; render(); });
+$('wlGo').onclick=()=>{ store.set('key',$('apiKey').value.trim()); clearInterval(timer); poll(); timer=setInterval(poll,60000); };
+
+renderSessions(); render();
+</script>
+</body>
+</html>
