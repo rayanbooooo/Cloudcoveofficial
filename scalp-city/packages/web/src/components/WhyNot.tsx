@@ -10,6 +10,8 @@ const ACTION_LABEL: Record<NonNullable<Blocker['action']>, string> = {
   worker: 'Turn on',
   resume: 'Resume',
   release: 'Release',
+  'reset-breaker': 'Reset',
+  'accept-reconciliation': 'Accept broker state',
 };
 
 /**
@@ -52,6 +54,13 @@ export function WhyNotPlacing({ w, headline }: { w: WorkerView; headline?: boole
           break;
         case 'release':
           openModal({ kind: 'release-kill' });
+          break;
+        case 'reset-breaker':
+          // The same confirmation as the Risk drawer's Reset button, so it can be done from right here.
+          openModal({ kind: 'reset-breaker', breakerId: b.target ?? '', label: b.text });
+          break;
+        case 'accept-reconciliation':
+          openModal({ kind: 'accept-reconciliation' });
           break;
       }
     } catch (e) {

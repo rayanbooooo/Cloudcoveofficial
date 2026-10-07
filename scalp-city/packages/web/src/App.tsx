@@ -1,4 +1,5 @@
 import { lazy, Suspense } from 'react';
+import { DRAWER_WIDTHS, WORKER_DESK_WIDTH } from './lib/layout';
 import { useIsMobile } from './lib/useIsMobile';
 import { useStore } from './store/store';
 import { Modals } from './components/Modals';
@@ -26,6 +27,9 @@ function Loading({ label }: { label: string }) {
 
 function DesktopLayout() {
   const live = useStore((s) => s.system?.env === 'live');
+  // How much of the right side an open drawer or worker desk covers. The tab bar must stay clear of it:
+  // under the desk, most of the tabs (Risk among them) could not be reached.
+  const cover = useStore((s) => (s.ui.selectedWorker ? WORKER_DESK_WIDTH : s.ui.drawer ? DRAWER_WIDTHS[s.ui.drawer] : 0));
   return (
     <div className={cx('flex h-full flex-col', live && 'live-frame')}>
       <TopBar />
@@ -47,11 +51,14 @@ function DesktopLayout() {
             <WorkersPanel />
             <Scanner />
           </div>
-          <div className="pointer-events-auto col-span-3 grid min-h-0 grid-cols-[minmax(0,1fr)_auto] items-end gap-3">
-            <div className="max-h-[188px] min-h-0">
+          <div
+            className={cx('pointer-events-auto col-span-3 grid min-h-0 items-end gap-3', cover > 0 ? 'grid-cols-[minmax(0,1fr)]' : 'grid-cols-[minmax(0,1fr)_auto]')}
+            style={{ paddingRight: cover }}
+          >
+            <div className="flex max-h-[188px] min-h-0 flex-col">
               <Timeline maxRows={60} />
             </div>
-            <Dock />
+            <Dock className={cover > 0 ? 'justify-self-end max-w-full' : undefined} />
           </div>
         </div>
       </main>

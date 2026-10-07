@@ -164,7 +164,7 @@ export function Drawer({ open, onClose, title, children, width = 560 }: { open: 
     <AnimatePresence>
       {open && (
         <motion.aside
-          className="fixed bottom-0 right-0 top-[var(--bar-h)] z-40 flex flex-col border-l border-line-2 bg-ink-900 shadow-[-24px_0_48px_-24px_rgba(0,0,0,0.9)]"
+          className="fixed bottom-0 right-0 top-[calc(var(--bar-h)+var(--status-h))] z-40 flex flex-col border-l border-line-2 bg-ink-900 shadow-[-24px_0_48px_-24px_rgba(0,0,0,0.9)]"
           style={{ width: `min(${width}px, 100vw)` }}
           initial={{ x: 40, opacity: 0 }}
           animate={{ x: 0, opacity: 1 }}

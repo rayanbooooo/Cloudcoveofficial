@@ -208,7 +208,8 @@ export const useStore = create<State>((set, get) => ({
   setBootNote: (bootNote) => set({ bootNote }),
   setConn: (c) => set({ conn: { ...get().conn, ...c } }),
   selectWorker: (id) => set({ ui: { ...get().ui, selectedWorker: id } }),
-  openDrawer: (d) => set({ ui: { ...get().ui, drawer: d } }),
+  // A drawer opens over the same side of the screen as a worker's desk, and the desk would hide it: one at a time.
+  openDrawer: (d) => set({ ui: { ...get().ui, drawer: d, selectedWorker: d ? null : get().ui.selectedWorker } }),
   openModal: (m) => set({ ui: { ...get().ui, modal: m } }),
   setTimelineOpen: (open) => set({ ui: { ...get().ui, timelineOpen: open } }),
   setMobileTab: (t) => set({ ui: { ...get().ui, mobileTab: t } }),

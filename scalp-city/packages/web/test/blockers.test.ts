@@ -118,6 +118,61 @@ describe('why a READY signal is not placing', () => {
   });
 });
 
+describe('clearing what is in the way from the same list', () => {
+  const tripped = (id: string, label: string, detail: string | null) => ({ id, label, tripped: true, trippedAt: NOW - 3_600_000, detail, latched: true });
+  const mismatch = (kind: string, detail: string) => ({ kind, symbol: 'QQQ', local: 0, broker: -100, detail });
+
+  it('offers to reset a latched account-mismatch breaker, and says what tripped it', () => {
+    // What the live screen showed: the account is clean again, but the breaker from the mismatch is still latched.
+    const sys = system(
+      { breakers: [tripped('ACCOUNT_MISMATCH', 'Account mismatch', 'open sell order for 100 QQQ not placed by Scalp City')], reconciliation: { status: 'RECONCILED', mismatches: [] } },
+      { isOpen: false, label: 'PRE_MARKET', nextOpen: OPEN_AT },
+      {},
+      [
+        { code: 'BREAKER_ACCOUNT_MISMATCH', message: 'Account mismatch' },
+        { code: 'MARKET_CLOSED', message: 'Market pre market' },
+      ],
+    );
+    const b = entryBlockers(worker({ haltReason: 'HALTED · ACCOUNT MISMATCH' }), sys, null, NOW);
+    expect(codes(b)).toEqual(['MARKET_CLOSED', 'BREAKER_ACCOUNT_MISMATCH']);
+    const breaker = b[1]!;
+    expect(breaker.action).toBe('reset-breaker');
+    expect(breaker.target).toBe('ACCOUNT_MISMATCH');
+    expect(breaker.detail).toContain('open sell order for 100 QQQ not placed by Scalp City');
+    expect(breaker.detail).toContain('stays on until you reset it');
+  });
+
+  it('offers no reset for a breaker that would come straight back', () => {
+    for (const id of ['DAILY_LOSS', 'CLOCK', 'ACCOUNT_CHANGED']) {
+      const sys = system({ breakers: [tripped(id, 'x', 'because')] }, {}, {}, [{ code: `BREAKER_${id}`, message: 'x' }]);
+      const [only] = entryBlockers(worker(), sys, null, NOW);
+      expect(only!.action).toBeUndefined();
+      expect(only!.detail).toBe('because');
+    }
+  });
+
+  it('offers to accept the broker’s state for a position mismatch, but not for a stray order that must be cancelled', () => {
+    const halts = [{ code: 'RECONCILIATION', message: 'Account reconciliation mismatch' }];
+    const position = system({ reconciliation: { status: 'MISMATCH', mismatches: [mismatch('UNEXPECTED_POSITION', 'broker holds -111 QQQ; Scalp City has no record of opening it')] } }, {}, {}, halts);
+    const [p] = entryBlockers(worker(), position, null, NOW);
+    expect(p!.action).toBe('accept-reconciliation');
+    expect(p!.detail).toContain('broker holds -111 QQQ');
+
+    const order = system({ reconciliation: { status: 'MISMATCH', mismatches: [mismatch('UNEXPECTED_ORDER', 'open sell order for 100 QQQ not placed by Scalp City')] } }, {}, {}, halts);
+    const [o] = entryBlockers(worker(), order, null, NOW);
+    expect(o!.action).toBeUndefined();
+    expect(o!.detail).toContain('Cancel it at the broker');
+  });
+
+  it('does not repeat a system halt in the worker’s own words, but keeps the worker’s own reasons', () => {
+    const halts = [{ code: 'BREAKER_ACCOUNT_MISMATCH', message: 'Account mismatch' }];
+    for (const text of ['HALTED · ACCOUNT MISMATCH', 'RECONCILIATION MISMATCH', 'SYSTEM RECOVERING', 'KILL SWITCH']) {
+      expect(codes(entryBlockers(worker({ haltReason: text }), system({}, {}, {}, halts), null, NOW))).not.toContain('WORKER_HALT');
+    }
+    expect(codes(entryBlockers(worker({ haltReason: 'WORKER DAILY LOSS LIMIT' }), system({}, {}, {}, halts), null, NOW))).toContain('WORKER_HALT');
+  });
+});
+
 describe('a READY that is really the last bar of the previous session', () => {
   it('is stale while the market is closed, however recent the bar looks', () => {
     expect(signalIsStale(worker(), system({}, { isOpen: false, label: 'PRE_MARKET' }), NOW)).toBe(true);

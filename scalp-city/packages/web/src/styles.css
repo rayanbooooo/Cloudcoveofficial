@@ -39,6 +39,8 @@
 :root {
   color-scheme: dark;
   --bar-h: 44px;
+  /* The status line under the top bar (it states why trading is blocked): panels open beneath it, never over it. */
+  --status-h: 27px;
 }
 
 html,
