@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { JournalTradeView, Snapshot, WorkerView } from '@scalp-city/shared';
 import { startE2E, type E2E } from './support/e2eHarness.js';
+import { shareEntryRequest } from './support/scalpFlow.js';
 
 /**
  * The fast scalpers (ALPACA_WORKER_SET=scalp, the default) end to end against the Alpaca fake: 1-minute bars,
@@ -61,6 +62,45 @@ async function ready(x: E2E): Promise<void> {
   expect((await x.api('POST', '/api/controls/autotrading', { enabled: true })).status).toBe(200);
   expect((await x.api('POST', '/api/workers/scalp-gold/enabled', { enabled: true, confirmed: true })).status).toBe(200);
 }
+
+describe('a thin market with no fresh price', () => {
+  it('keeps the liquid markets trading, and is a system-level halt only when no market has a price', async () => {
+    const x = await start(flatHistory);
+    await ready(x);
+    const tick = (symbols: ('GLD' | 'QQQ' | 'DIA' | 'FXB' | 'FXE')[]) => {
+      for (const s of symbols) x.fake.trade(s, PRICES[s], 100);
+    };
+    const codes = async () => (await snapshot(x)).system.trading.haltReasons.map((r) => r.code);
+
+    // Ten seconds on: GLD, QQQ and DIA print again; FXB and FXE, as thin ETFs do, say nothing.
+    x.clock.advance(10_000);
+    tick(['GLD', 'QQQ', 'DIA']);
+    await x.waitFor(async () => (((await snapshot(x)).system.trading.quietMarkets.length === 2) ? true : null), 'FXB and FXE quiet');
+    const s = await snapshot(x);
+    expect([...s.system.trading.quietMarkets].sort()).toEqual(['FXB', 'FXE']);
+    expect(await codes()).not.toContain('DATA_STALE'); // two quiet markets are not a halt
+    expect(s.system.trading.entriesAllowed).toBe(true);
+    expect(s.system.marketData.symbols.GLD!.stale).toBe(false);
+    expect(s.system.marketData.symbols.FXB!.stale).toBe(true);
+
+    // The risk engine judges each entry on its own market: GLD's data is fine, FXB's is not.
+    const gld = await x.app.ctx.orders.previewRisk(shareEntryRequest(x, 'scalp-gold', 'GLD', 300));
+    expect(gld.checks.find((c) => c.id === 'data_fresh')).toMatchObject({ passed: true });
+    const fxb = await x.app.ctx.orders.previewRisk(shareEntryRequest(x, 'scalp-gbp', 'FXB', 125));
+    expect(fxb.checks.find((c) => c.id === 'data_fresh')).toMatchObject({ passed: false });
+
+    // Another ten seconds and nothing has printed: now no market has a fresh price, and that is a reason for all.
+    x.clock.advance(10_000);
+    await x.waitFor(async () => (((await snapshot(x)).system.trading.quietMarkets.length === 5) ? true : null), 'every market quiet');
+    expect(await codes()).toContain('DATA_STALE');
+    expect((await snapshot(x)).system.trading.entriesAllowed).toBe(false);
+
+    // And it clears by itself.
+    tick(['GLD', 'QQQ', 'DIA', 'FXB', 'FXE']);
+    await x.waitFor(async () => (((await snapshot(x)).system.trading.quietMarkets.length === 0) ? true : null), 'prices back');
+    expect(await codes()).not.toContain('DATA_STALE');
+  }, 90_000);
+});
 
 describe('fast scalpers', () => {
   it('run the five 1-minute workers, long and short, with tight stops and short holds', async () => {

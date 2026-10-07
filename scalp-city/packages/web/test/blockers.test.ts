@@ -93,10 +93,26 @@ describe('why a READY signal is not placing', () => {
     const b = entryBlockers(worker(), system(), quiet, NOW);
     expect(codes(b)).toEqual(['DATA_STALE']);
     expect(b[0]!.detail).toContain('1m');
-    // The system already said so: not repeated.
-    expect(codes(entryBlockers(worker(), system({}, {}, {}, [{ code: 'DATA_STALE', message: 'Market data stale: QQQ' }]), quiet, NOW))).toEqual(['DATA_STALE']);
+    // The system already said so: not repeated, and in this worker's own words (it is its market that counts).
+    const again = entryBlockers(worker(), system({}, {}, {}, [{ code: 'DATA_STALE', message: 'Market data stale: QQQ, FXB' }]), quiet, NOW);
+    expect(codes(again)).toEqual(['DATA_STALE']);
+    expect(again[0]!.text).toBe('No fresh QQQ price');
     // Closed market: that is the explanation, the stale price is not added.
     expect(codes(entryBlockers(worker(), system({}, { isOpen: false, label: 'CLOSED' }), quiet, NOW))).toEqual(['MARKET_CLOSED']);
+  });
+
+  it('does not blame a worker for another market going quiet', () => {
+    // GLD, QQQ and DIA are fine; FXB and FXE are quiet. The QQQ worker has nothing in its way.
+    const sys = system({}, { isOpen: true, label: 'OPEN' });
+    (sys.trading as { quietMarkets: string[] }).quietMarkets = ['FXB', 'FXE'];
+    const fresh = { stale: false, ageMs: 800 } as SymbolQuoteView;
+    expect(entryBlockers(worker(), sys, fresh, NOW)).toEqual([]);
+    // The FXB worker is told about its own market, and that the others trade.
+    const fxb = entryBlockers(worker({ config: { id: 'scalp-gbp', symbol: 'FXB', timeframe: '1Min', params: { readyThreshold: 60 } } }), sys, { stale: true, ageMs: 41_000 } as SymbolQuoteView, NOW);
+    expect(codes(fxb)).toEqual(['DATA_STALE']);
+    expect(fxb[0]!.text).toBe('No fresh FXB price');
+    expect(fxb[0]!.detail).toContain('Last update 41');
+    expect(fxb[0]!.detail).toContain('other markets keep trading');
   });
 
   it('falls back to the last risk check, if it is recent, when nothing is switched off or closed', () => {

@@ -16,6 +16,7 @@
  *   DEMO_OANDA_OFFERED=XAU_USD,GBP_USD,EUR_JPY DEMO_BROKER=oanda npm run demo   # an account that is not offered the others
  *   DEMO_AUTOTRADE=1 npm run demo    # also switch autotrading on (fake account)
  *   DEMO_SESSIONS=extended|all DEMO_START=06:40:00 npm run demo   # fast scalpers outside 09:30-16:00 (the fake then enforces Alpaca's session rules)
+ *   DEMO_QUIET=FXB,FXE npm run demo  # these markets never print, like thin ETFs on the free feed: see how the UI shows a market with no fresh price
  *
  * Hosting the demo behind a public URL (e.g. a Vercel Sandbox): set HOST=0.0.0.0,
  * PUBLIC_URL / ALLOWED_ORIGINS to that URL, COOKIE_SECURE=true and a strong
@@ -51,6 +52,8 @@ const SET = (process.env.DEMO_SET ?? 'scalp').toLowerCase();
 if (SET !== 'scalp' && SET !== 'etf' && SET !== 'options') throw new Error(`DEMO_SET must be scalp, etf or options, got "${SET}"`);
 const ETF_MARKETS = SET !== 'options';
 if (BROKER !== 'alpaca' && BROKER !== 'oanda') throw new Error(`DEMO_BROKER must be alpaca or oanda, got "${BROKER}"`);
+/** Alpaca demo: markets that never print (thin ETFs on the free feed), to see how a market with no fresh price is shown. */
+const QUIET = new Set((process.env.DEMO_QUIET ?? '').split(',').map((x) => x.trim().toUpperCase()).filter(Boolean));
 /** Alpaca demo: which sessions the fast scalpers trade (ALPACA_SESSIONS). Anything but `regular` makes the fake enforce Alpaca's session rules. */
 const SESSIONS = (process.env.DEMO_SESSIONS ?? 'regular').toLowerCase();
 if (SESSIONS !== 'regular' && SESSIONS !== 'extended' && SESSIONS !== 'all') throw new Error(`DEMO_SESSIONS must be regular, extended or all, got "${SESSIONS}"`);
@@ -252,12 +255,13 @@ async function main(): Promise<void> {
   const tape = setInterval(() => {
     const minute = Math.floor(clock.now() / 60_000);
     if (minute !== lastMinute) {
-      for (const s of fake.prices.keys()) fake.closeBar(s);
+      for (const s of fake.prices.keys()) if (!QUIET.has(s)) fake.closeBar(s);
       lastMinute = minute;
       if ((minute - startMinute) % 9 === 0) for (const s of regimes.keys()) regimes.set(s, Math.round(rnd() * 2 - 1));
     }
     const m = minute - startMinute;
     for (const [s, p] of fake.prices) {
+      if (QUIET.has(s)) continue;
       const drift = driftPerMinute(s, m, regimes.get(s) ?? 0) / 150;
       const noise = (rnd() - 0.5) * (s === 'IWM' || s === 'FXB' || s === 'FXE' ? 0.03 : 0.06);
       fake.trade(s, p.last + drift + noise, Math.floor(50 + rnd() * 400));

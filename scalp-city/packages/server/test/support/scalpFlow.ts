@@ -1,5 +1,6 @@
 import { expect } from 'vitest';
 import type { Snapshot, WorkerView } from '@scalp-city/shared';
+import type { OrderRequest } from '../../src/orders/types.js';
 import type { E2E } from './e2eHarness.js';
 
 /** Helpers shared by the end-to-end tests that drive the fast scalpers minute by minute against the Alpaca fake. */
@@ -37,4 +38,28 @@ export async function ready(x: E2E): Promise<void> {
   await x.waitFor(async () => ((await snapshot(x)).system.phase === 'READY' ? true : null), 'system READY');
   expect((await x.api('POST', '/api/controls/autotrading', { enabled: true })).status).toBe(200);
   expect((await x.api('POST', '/api/workers/scalp-gold/enabled', { enabled: true, confirmed: true })).status).toBe(200);
+}
+
+/** A worker's long entry of one share with a stop a dollar below, fresh as of now: what a risk preview is asked about. */
+export function shareEntryRequest(x: E2E, workerId: string, symbol: string, price: number): OrderRequest & { signalBarCloseAt: number; referencePrice: number } {
+  return {
+    workerId,
+    source: 'WORKER',
+    purpose: 'ENTRY',
+    signalId: `preview:${symbol}:${x.clock.now()}`,
+    symbol,
+    underlying: symbol,
+    assetClass: 'us_equity',
+    side: 'buy',
+    positionIntent: null,
+    type: 'limit',
+    timeInForce: 'day',
+    qty: 1,
+    limitPrice: price + 0.05,
+    stopPrice: null,
+    meta: { multiplier: 1, direction: 'CALL', softStop: { price: price - 1 } },
+    actor: 'test',
+    signalBarCloseAt: x.clock.now() - 1000,
+    referencePrice: price + 0.02,
+  };
 }

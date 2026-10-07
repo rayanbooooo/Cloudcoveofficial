@@ -514,6 +514,11 @@ export interface SystemView {
     /** Workers allowed to submit any order right now. */
     autotradingActive: boolean;
     haltReasons: HaltReason[];
+    /**
+     * Markets with no fresh price while the market is open (a thin ETF on the free feed is often one). Their own
+     * workers wait; the others trade. Only when every market is quiet is that a halt reason (DATA_STALE).
+     */
+    quietMarkets: string[];
   };
   broker: {
     name: BrokerName;

@@ -359,6 +359,7 @@ export class ViewBuilder {
         entriesAllowed: reasons.length === 0,
         autotradingActive: ctx.controls.autotrading && !ctx.controls.killSwitch.active && ctx.systemHalt() === null,
         haltReasons: reasons,
+        quietMarkets: configured ? ctx.quietMarkets() : [],
       },
       broker: {
         name: brokerNameOf(this.config.venue),

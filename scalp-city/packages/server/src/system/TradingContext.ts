@@ -441,6 +441,15 @@ export class TradingContext {
     return null;
   }
 
+  /**
+   * Markets with no fresh price while the market is open. A thin ETF on the free feed is often one: its own worker
+   * waits (the risk engine judges every entry on its own market's data), and the others trade.
+   */
+  quietMarkets(): string[] {
+    if (!this.configured || !this.calendar || !this.marketData || !this.calendar.isOpen()) return [];
+    return this.marketData.symbols.filter((s) => this.marketData.freshness(s).stale);
+  }
+
   /** Every reason new entries are blocked right now — never hidden (spec §95). */
   haltReasons(): HaltReason[] {
     const out: HaltReason[] = [];
@@ -466,8 +475,10 @@ export class TradingContext {
         });
       }
       else {
-        const stale = this.marketData.symbols.filter((s) => this.marketData.freshness(s).stale);
-        if (stale.length) out.push({ code: 'DATA_STALE', message: `Market data stale: ${stale.join(', ')}` });
+        // One thin market without a fresh price does not stop the others (each worker is judged on its own market:
+        // see quietMarkets). Only when nothing has a fresh price is entering impossible everywhere.
+        const quiet = this.quietMarkets();
+        if (quiet.length > 0 && quiet.length === this.marketData.symbols.length) out.push({ code: 'DATA_STALE', message: `Market data stale: ${quiet.join(', ')}` });
       }
       const c = this.calendar.clockStatus();
       if (!c.ok) out.push({ code: 'CLOCK', message: c.brokerSkewMs === null ? 'Server clock not verified' : `Clock skew ${c.brokerSkewMs}ms` });

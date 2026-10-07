@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Api, ApiError } from '../lib/api';
 import { age, countdown, dayHmET, humanize, timeET } from '../lib/format';
 import { sessionWords } from '../lib/sessions';
-import { autotradingState, isFault } from '../lib/status';
+import { autotradingState, dataChip, isFault } from '../lib/status';
 import { serverNow, useStore } from '../store/store';
 import { Btn, cx, Dot, Toggle } from './ui';
 
@@ -53,14 +53,17 @@ export function StatusChips() {
   const m = system.market;
   const md = system.marketData;
   const brokerOk = b.status === 'CONNECTED';
-  const ages = Object.values(quotes).map((q) => q.ageMs).filter((x): x is number => x !== null);
+  // Markets with no fresh price (a thin ETF on the free feed) would make "how old is the data" read as minutes.
+  const quiet = m.isOpen ? (system.trading.quietMarkets ?? []) : [];
+  const ages = Object.entries(quotes)
+    .filter(([sym]) => !quiet.includes(sym))
+    .map(([, q]) => q.ageMs)
+    .filter((x): x is number => x !== null);
   const latency = ages.length ? Math.max(...ages) : null;
   const dataConnected = md.stock.state === 'CONNECTED';
-  const anyStale = Object.values(md.symbols).some((s) => s.stale);
-  // The free plan's overnight feed: quotes in real time, trades (so bars, so signals) 15 minutes late.
-  const quotesOnly = md.stockFeed === 'overnight';
-  const dataLabel = !dataConnected ? md.stock.state : !md.stockRealtime ? 'DELAYED' : quotesOnly ? 'QUOTES ONLY' : m.isOpen && anyStale ? 'STALE' : 'LIVE';
-  const dataStatus = !dataConnected ? 'error' : !md.stockRealtime || quotesOnly || (m.isOpen && anyStale) ? 'warn' : 'ok';
+  const data = dataChip(system);
+  const dataLabel = data.label;
+  const dataStatus = data.tone;
   // Open: time to the end of the trading run (the 16:00 close, 20:00, or the weekend under overnight trading: a
   // moment that far off reads better as a weekday and time than as 109 hours).
   const marketCountdown = m.isOpen ? (m.nextClose ? countdown(m.nextClose - now) : '') : m.nextOpen ? countdown(m.nextOpen - now) : '';
@@ -81,7 +84,10 @@ export function StatusChips() {
         <span className={cx('label-strong text-[10.5px]', m.isOpen ? 'text-fg' : 'text-fg-2')}>{system.venue === 'oanda' ? (m.isOpen ? 'OPEN' : 'CLOSED') : humanize(m.label)}</span>
         {marketCountdown && <span className="num text-[11px] text-fg-3">{marketNote}</span>}
       </Chip>
-      <Chip label="Data" title={`${md.stockFeedLabel}${md.stockPartialVolume ? ' — IEX carries only part of consolidated volume' : ''}`}>
+      <Chip
+        label="Data"
+        title={`${md.stockFeedLabel}${md.stockPartialVolume ? ' — IEX carries only part of consolidated volume' : ''}${quiet.length ? ` — no fresh price: ${quiet.join(', ')}` : ''}`}
+      >
         <Dot status={dataStatus} pulse={dataStatus === 'ok' && m.isOpen} />
         <span className={cx('label-strong text-[10.5px]', dataStatus === 'ok' ? 'text-fg' : dataStatus === 'warn' ? 'text-pending' : 'text-put')}>{dataLabel}</span>
         <span className="num text-[11px] text-fg-2">{dataConnected ? age(latency) : ''}</span>
@@ -157,7 +163,9 @@ export function StatusLine() {
   const openDrawer = useStore((s) => s.openDrawer);
   if (!system) return null;
   const live = system.env === 'live';
-  const a = autotradingState(system);
+  const workers = useStore((s) => s.workers);
+  const watched = new Set(Object.values(workers).filter((w) => w.autotradeEnabled).map((w) => w.config.symbol));
+  const a = autotradingState(system, undefined, watched);
   const parts = [
     live ? 'LIVE' : system.venue === 'oanda' ? 'PRACTICE' : 'PAPER',
     a.label,
@@ -184,6 +192,14 @@ export function StatusLine() {
               Open risk &amp; breakers
             </button>
           )}
+        </span>
+      )}
+      {a.quiet.length > 0 && (
+        <span
+          className="label-strong rounded-[1px] border border-line-2 px-1.5 py-[1px] text-[10px] text-pending"
+          title="These markets have no fresh price (a thin ETF on the free feed often goes quiet). Their workers wait; the others trade."
+        >
+          NO FRESH PRICE: {a.quiet.join(' · ')} — THEIR WORKERS WAIT
         </span>
       )}
       {a.detail && <span className="label">{a.detail}</span>}

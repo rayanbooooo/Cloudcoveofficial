@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { SystemView } from '@scalp-city/shared';
-import { autotradingState } from '../src/lib/status';
+import { autotradingState, dataChip } from '../src/lib/status';
 
 /** 09:30 New York on a weekday: the US open. */
 const OPEN_AT = Date.UTC(2026, 9, 6, 13, 30);
@@ -42,13 +42,36 @@ describe('what the status line says about autotrading', () => {
   it.each([
     ['RECONCILIATION', 'Account reconciliation mismatch'],
     ['BROKER', 'Broker DISCONNECTED'],
-    ['DATA_STALE', 'Market data stale: QQQ'],
     ['CLOCK', 'Clock skew 4000ms'],
     ['PHASE', 'recovering'],
     ['DAILY_LOSS', 'Daily loss limit reached'],
     ['NOT_CONFIGURED', 'Broker credentials not configured'],
   ])('%s is a real fault: halted', (code, message) => {
     expect(autotradingState(system([{ code, message }], {}, { isOpen: true, label: 'OPEN', nextOpen: null }), localBelgium).tone).toBe('halted');
+  });
+
+  it('no market having a price is waiting for data, not halted: it clears by itself when the data comes back', () => {
+    const stale = { code: 'DATA_STALE', message: 'Market data stale: GLD, QQQ, DIA, FXB, FXE' };
+    const s = autotradingState(system([stale], {}, { isOpen: true, label: 'OPEN', nextOpen: null }), localBelgium);
+    expect(s).toMatchObject({ tone: 'waiting', label: 'AUTOTRADING ON · WAITING FOR MARKET DATA', detail: 'No market has a fresh price right now.' });
+    expect(s.reasons).toEqual([stale]);
+    expect(s.quiet).toEqual([]); // the reason already says so
+    // A feed that is down is a phase reason, and that is still a fault.
+    expect(autotradingState(system([stale, { code: 'PHASE', message: 'market data disconnected' }], {}, { isOpen: true, label: 'OPEN' }), localBelgium).tone).toBe('halted');
+  });
+
+  it('some markets without a fresh price are a note, not a halt: the others trade', () => {
+    const sys = system([], {}, { isOpen: true, label: 'OPEN', nextOpen: null });
+    (sys.trading as { quietMarkets: string[] }).quietMarkets = ['FXB', 'FXE'];
+    const s = autotradingState(sys, localBelgium);
+    expect(s).toMatchObject({ tone: 'on', label: 'AUTOTRADING ENABLED', reasons: [], quiet: ['FXB', 'FXE'] });
+  });
+
+  it('leaves a quiet market out of the note when its worker is switched off', () => {
+    const sys = system([], {}, { isOpen: true, label: 'OPEN', nextOpen: null });
+    (sys.trading as { quietMarkets: string[] }).quietMarkets = ['FXB', 'FXE'];
+    expect(autotradingState(sys, localBelgium, new Set(['GLD', 'QQQ', 'DIA'])).quiet).toEqual([]);
+    expect(autotradingState(sys, localBelgium, new Set(['GLD', 'FXB'])).quiet).toEqual(['FXB']);
   });
 
   it('is enabled when nothing blocks entries', () => {
@@ -79,5 +102,40 @@ describe('what the status line says about autotrading', () => {
 
   it('says nothing about the opening time when the server does not know it', () => {
     expect(autotradingState(system([CLOSED], {}, { nextOpen: null }), localBelgium).detail).toBeNull();
+  });
+});
+
+describe('the data chip in the top bar', () => {
+  function withData(over: Record<string, unknown> = {}, quiet: string[] = [], open = true): SystemView {
+    return {
+      market: { isOpen: open },
+      trading: { quietMarkets: quiet },
+      marketData: {
+        stock: { state: 'CONNECTED' },
+        stockRealtime: true,
+        stockFeed: 'iex',
+        symbols: { GLD: {}, QQQ: {}, DIA: {}, FXB: {}, FXE: {} },
+        ...over,
+      },
+    } as unknown as SystemView;
+  }
+
+  it('says LIVE when every market has a fresh price', () => {
+    expect(dataChip(withData())).toEqual({ label: 'LIVE', tone: 'ok' });
+  });
+
+  it('counts the markets with a price when a few are quiet, instead of calling the whole feed stale', () => {
+    expect(dataChip(withData({}, ['FXB', 'FXE']))).toEqual({ label: '3/5 LIVE', tone: 'warn' });
+  });
+
+  it('says STALE only when no market has a fresh price', () => {
+    expect(dataChip(withData({}, ['GLD', 'QQQ', 'DIA', 'FXB', 'FXE']))).toEqual({ label: 'STALE', tone: 'warn' });
+  });
+
+  it('ignores quiet markets while the market is closed, and reports a feed that is down or late as such', () => {
+    expect(dataChip(withData({}, ['FXB'], false))).toEqual({ label: 'LIVE', tone: 'ok' });
+    expect(dataChip(withData({ stock: { state: 'RECONNECTING' } }))).toEqual({ label: 'RECONNECTING', tone: 'error' });
+    expect(dataChip(withData({ stockRealtime: false }))).toEqual({ label: 'DELAYED', tone: 'warn' });
+    expect(dataChip(withData({ stockFeed: 'overnight' }))).toEqual({ label: 'QUOTES ONLY', tone: 'warn' });
   });
 });

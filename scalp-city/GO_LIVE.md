@@ -238,7 +238,12 @@ previous copy finishes. The app says so and reconnects by itself; just wait.
   scalper makes dozens a day: live, the bot hits that limit and sits out (it enforces the rule). A cash account can
   only trade settled cash. Short selling needs a margin account with shorting enabled.
 - **FXB and FXE** trade little and their spreads are wide against a 1-minute move: expect "spread too wide" and
-  stale-data blocks there; most of the action will be GLD, QQQ and DIA.
+  stale-data blocks there; most of the action will be GLD, QQQ and DIA. On the free IEX feed they often go minutes
+  without a quote, so they will mostly sit out. The app says so without calling it a halt: the data chip reads
+  `3/5 LIVE`, the status line notes `NO FRESH PRICE: FXB · FXE`, and only their own workers wait while GLD, QQQ and DIA
+  trade. Switch those two workers off to make the note go away, or subscribe to SIP (`ALPACA_STOCK_FEED=sip`), where
+  consolidated quotes keep them fresh. "Market data stale" becomes a halt for everything only when NO market has a
+  fresh price.
 
 ### B3a. Every session: pre-market, after-hours, overnight
 

@@ -52,8 +52,8 @@ function marketBlocker(system: SystemView, now: number): Blocker {
   };
 }
 
-/** Codes the first rules below cover themselves; the system's own list repeats them. */
-const HANDLED = new Set(['KILL_SWITCH', 'AUTOTRADING_OFF', 'ENTRIES_PAUSED', 'MARKET_CLOSED']);
+/** Codes the first rules below cover themselves; the system's own list repeats them. DATA_STALE is judged on this worker's own market. */
+const HANDLED = new Set(['KILL_SWITCH', 'AUTOTRADING_OFF', 'ENTRIES_PAUSED', 'MARKET_CLOSED', 'DATA_STALE']);
 
 /**
  * Breakers a person can sensibly reset once the cause is gone. The others (daily loss, clock, account change)
@@ -109,9 +109,17 @@ export function entryBlockers(w: WorkerView, system: SystemView, quote: SymbolQu
   for (const r of system.trading.haltReasons) if (!HANDLED.has(r.code)) out.push(systemReason(r, system));
   if (w.market && w.market.listed === false) out.push({ code: 'NOT_OFFERED', text: 'Not offered to this account by the broker' });
   if (w.haltReason && !SYSTEM_HALT_TEXT.test(w.haltReason) && !out.some((b) => b.text === w.haltReason)) out.push({ code: 'WORKER_HALT', text: w.haltReason });
-  // Data that went quiet while the market is open (when it is closed, that is the explanation already).
-  if (system.market.isOpen && quote?.stale && !out.some((b) => b.code === 'DATA_STALE')) {
-    out.push({ code: 'DATA_STALE', text: `No fresh ${w.config.symbol} price`, detail: quote.ageMs !== null ? `Last update ${age(quote.ageMs)} ago.` : undefined });
+  // Data that went quiet while the market is open (when it is closed, that is the explanation already). It is THIS
+  // worker's market that counts: another market going quiet does not stop it.
+  if (system.market.isOpen) {
+    const quiet = system.trading.quietMarkets?.includes(w.config.symbol) ?? false;
+    if (quote?.stale || (!quote && quiet)) {
+      out.push({
+        code: 'DATA_STALE',
+        text: `No fresh ${w.config.symbol} price`,
+        detail: quote?.ageMs != null ? `Last update ${age(quote.ageMs)} ago. A thin market can stay quiet for minutes; the other markets keep trading.` : 'A thin market can stay quiet for minutes; the other markets keep trading.',
+      });
+    }
   }
   if (out.length === 0) {
     // Nothing is switched off or closed: the last risk check, if it is recent, is the reason.

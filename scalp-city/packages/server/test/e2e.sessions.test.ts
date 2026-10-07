@@ -1,9 +1,8 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import type { JournalTradeView } from '@scalp-city/shared';
-import type { OrderRequest } from '../src/orders/types.js';
 import type { FakeAlpacaOptions } from './fakes/FakeAlpaca.js';
 import { startE2E, type E2E } from './support/e2eHarness.js';
-import { LOOSE, PRICES, flatHistory, minute, ready, sleep, snapshot, worker } from './support/scalpFlow.js';
+import { LOOSE, PRICES, flatHistory, minute, ready, shareEntryRequest, sleep, snapshot, worker } from './support/scalpFlow.js';
 
 /**
  * ALPACA_SESSIONS: the fast scalpers outside the regular session, end to end against the Alpaca fake with its
@@ -247,26 +246,7 @@ describe('the free plan’s data gaps', () => {
     expect(x.fake.orders.size).toBe(0);
 
     // The risk engine says why, in the same list of checks as every other order.
-    const entry: OrderRequest & { signalBarCloseAt: number; referencePrice: number } = {
-      workerId: 'scalp-gold',
-      source: 'WORKER',
-      purpose: 'ENTRY',
-      signalId: 'preview:free-overnight',
-      symbol: 'GLD',
-      underlying: 'GLD',
-      assetClass: 'us_equity',
-      side: 'buy',
-      positionIntent: null,
-      type: 'limit',
-      timeInForce: 'day',
-      qty: 1,
-      limitPrice: 300.1,
-      stopPrice: null,
-      meta: { multiplier: 1, direction: 'CALL', softStop: { price: 299 } },
-      actor: 'test',
-      signalBarCloseAt: x.clock.now() - 1000,
-      referencePrice: 300.05,
-    };
+    const entry = shareEntryRequest(x, 'scalp-gold', 'GLD', 300);
     const decision = await x.app.ctx.orders.previewRisk(entry);
     expect(decision.approved).toBe(false);
     const bars = decision.checks.find((c) => c.id === 'bars_live')!;
