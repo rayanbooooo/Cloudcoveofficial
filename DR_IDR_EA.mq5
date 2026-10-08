@@ -210,9 +210,10 @@ void TryEnter(const int dir, const double extreme)
      {
       g_tradesToday++;
       g_devDir = 0;
-      PrintFormat("%s %.2f lots | entry %.*f sl %.*f tp %.*f | IDR %.*f-%.*f DR %.*f-%.*f",
-                  dir < 0 ? "SELL" : "BUY", lots, digits, entry, digits, sl, digits, tp,
-                  digits, g_idrL, digits, g_idrH, digits, g_drL, digits, g_drH);
+      Print((dir < 0 ? "SELL " : "BUY "), DoubleToString(lots, 2), " lots | entry ", DoubleToString(entry, digits),
+            " sl ", DoubleToString(sl, digits), " tp ", DoubleToString(tp, digits),
+            " | IDR ", DoubleToString(g_idrL, digits), "-", DoubleToString(g_idrH, digits),
+            " DR ", DoubleToString(g_drL, digits), "-", DoubleToString(g_drH, digits));
      }
   }
 
