@@ -230,6 +230,15 @@ previous copy finishes. The app says so and reconnects by itself; just wait.
   install is deliberately slow (a few trades a day, one position at a time). Use **Fast scalping preset**
   in the Risk drawer, review, confirm: up to 300 trades a day, 5 positions at once, $5,000 per position. Then turn
   on **Autotrading** and **All on** (Workers panel).
+- **Go aggressive (paper only).** The limits above are small on purpose: each trade risks $5 and a position is about
+  $5,000, so on a $100,000 paper account a whole day moves by dollars. **Risk drawer → Aggressive preset (paper)**
+  sizes the share scalpers from the account instead: positions of 30% of equity ($30,000 on $100,000), a stop-out
+  risks up to 0.25% ($250), up to 1,000 trades a day, and the account stops taking new entries for the day at a 5%
+  loss ($5,000; each worker stands down alone at 1.5%). You can change the two percentages, preview exactly what
+  changes (the account limits and each worker's), and confirm; it is audit-logged. It is not available on a live
+  account: real money gets its limits set by hand, small. The numbers are fixed dollar amounts from the account's size
+  at the moment you confirm. Expect swings of thousands of dollars in BOTH directions, and the same costs per trade
+  (spread, slippage) on much bigger size. The daily-loss stop is the brake; limits cannot be switched off.
 - **Honest expectations.** More trades is not more profit. Each trade pays the spread and gives up a little to
   slippage, and a quick 1-minute momentum rule has no proven edge: with small targets those costs can eat all of
   it. Paper fills are also optimistic (no queue, no market impact). Use this to collect many trades quickly and read

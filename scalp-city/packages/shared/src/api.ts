@@ -93,6 +93,30 @@ export interface RiskLimitsChangePreview {
   requiresPassword: boolean;
 }
 
+/** The Aggressive preset: limits scaled to the account (paper only). Percentages are of account equity. */
+export interface RiskPresetRequest {
+  preset: 'aggressive';
+  /** The largest position and order. Default 30. */
+  positionPct?: number;
+  /** The account-wide daily-loss stop. Default 5. */
+  dailyLossPct?: number;
+  /** Required to apply (not to preview). */
+  confirmed?: boolean;
+}
+
+export interface RiskPresetPreview {
+  preset: 'aggressive';
+  equity: number;
+  positionPct: number;
+  dailyLossPct: number;
+  /** The account-wide limits that would change. */
+  account: RiskLimitsChangePreview;
+  /** What changes on each share worker (the same set for each of them). */
+  workers: { id: string; name: string; changes: { key: keyof WorkerLimits; from: number; to: number }[] }[];
+  /** Plain-words consequences, shown before the person confirms. */
+  notes: string[];
+}
+
 export interface WorkerUpdateRequest {
   limits?: Partial<WorkerLimits>;
   exits?: Partial<ExitRules>;

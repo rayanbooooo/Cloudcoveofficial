@@ -75,6 +75,11 @@ server. (`npm run user:create` does the same from a terminal.)
 Set `ALPACA_STOCK_FEED` / `ALPACA_OPTIONS_FEED` to what your data plan actually includes. The UI labels
 the feeds from these values (`LIVE · IEX ONLY`, `LIVE · SIP`, `DELAYED 15 MIN`).
 
+**Sizing.** The fast scalpers ship with small dollar limits (each trade risks $5, a position is about $5,000), so a
+$100,000 paper account barely moves. In the Risk drawer, **Aggressive preset (paper)** sizes them from the account:
+positions as a percentage of equity (30% by default), a stop-out risking 0.25%, and a daily-loss stop for the whole
+account (5% by default). It is previewed and confirmed, audit-logged, and refused on a live account.
+
 First paper session checklist (Alpaca; the OANDA checklist is the same with *practice* for *paper*):
 
 1. Health drawer is all green: broker, trade stream, market data, clock skew, reconciliation.

@@ -14,6 +14,7 @@ import {
   type JournalTradeView,
   type ManualOrderRequest,
   type OrderPreview,
+  type RiskPresetPreview,
   type Timeframe,
 } from '@scalp-city/shared';
 import { SESSION_COOKIE } from '../auth/AuthService.js';
@@ -21,6 +22,7 @@ import { ms, n } from '../db/db.js';
 import { nyDate } from '../market/MarketCalendar.js';
 import { stockFeedLabel } from '../marketdata/MarketDataService.js';
 import { rowToTrade } from '../positions/PositionLedger.js';
+import { AGGRESSIVE_BOUNDS, AGGRESSIVE_DEFAULTS, aggressiveAccountLimits, aggressiveWorkerLimits, presetBlocker } from '../risk/presets.js';
 import { RiskLimitsError } from '../risk/RiskSettings.js';
 import { LiveGateError } from '../safety/LiveGate.js';
 import type { BreakerId } from '../safety/CircuitBreakers.js';
@@ -63,8 +65,17 @@ const RiskLimitsPatch = z
     maxPriceDeviationPct: positive,
     noEntriesBeforeCloseMinutes: z.number().finite().min(0),
     pdtGuard: bool,
+    // Without this the schema stripped it: a change to "Max loss per trade" was accepted and then never applied.
+    maxRiskPerTrade: positive,
   })
   .partial();
+
+const RiskPresetBody = z.object({
+  preset: z.literal('aggressive'),
+  positionPct: z.number().finite().min(AGGRESSIVE_BOUNDS.positionPct.min).max(AGGRESSIVE_BOUNDS.positionPct.max).optional(),
+  dailyLossPct: z.number().finite().min(AGGRESSIVE_BOUNDS.dailyLossPct.min).max(AGGRESSIVE_BOUNDS.dailyLossPct.max).optional(),
+  confirmed: z.boolean().optional(),
+});
 
 interface StoredPreview {
   userId: string;
@@ -372,6 +383,82 @@ export function registerRoutes(fastify: FastifyInstance, app: App): void {
     ctx().timeline.add({ kind: 'control', severity: result.preview.increasesRisk ? 'warn' : 'info', title: 'Risk limits changed', detail: result.preview.changes.map((c) => `${c.key}: ${c.from} → ${c.to}`).join(', ') });
     app.bus.emit('SYSTEM_UPDATED', {});
     return { limits: rs.get() };
+  });
+
+  // ── Aggressive preset: limits scaled to the account (paper only) ───────────
+  /** What the preset would change, from the account's size now. Throws when it cannot be applied here. */
+  const buildPreset = (body: z.infer<typeof RiskPresetBody>) => {
+    const c = ctx();
+    const shareWorkers = c.workers.all().filter((w) => w.config.instrument === 'EQUITY');
+    const equity = c.account.account?.equity ?? null;
+    const blocked = presetBlocker({ env: c.env, venue: c.venue, equity, workers: shareWorkers.length });
+    if (blocked) throw new HttpError(409, 'PRESET_UNAVAILABLE', blocked);
+    const input = {
+      equity: equity!,
+      positionPct: body.positionPct ?? AGGRESSIVE_DEFAULTS.positionPct,
+      dailyLossPct: body.dailyLossPct ?? AGGRESSIVE_DEFAULTS.dailyLossPct,
+      workers: shareWorkers.length,
+    };
+    const accountPatch = aggressiveAccountLimits(input);
+    const workerPatch = aggressiveWorkerLimits(input);
+    let account;
+    try {
+      account = c.riskSettings.preview(accountPatch, false);
+    } catch (err) {
+      if (err instanceof RiskLimitsError) throw new HttpError(400, 'INVALID_LIMITS', err.message);
+      throw err;
+    }
+    const workers = shareWorkers.map((w) => ({
+      id: w.config.id,
+      name: w.config.name,
+      changes: (Object.keys(workerPatch) as (keyof typeof workerPatch)[])
+        .map((k) => ({ key: k, from: w.config.limits[k] as number, to: workerPatch[k] as number }))
+        .filter((x) => x.from !== x.to),
+    }));
+    const money = (v: number) => `$${Math.round(v).toLocaleString('en-US')}`;
+    const preview: RiskPresetPreview = {
+      preset: 'aggressive',
+      equity: input.equity,
+      positionPct: input.positionPct,
+      dailyLossPct: input.dailyLossPct,
+      account: account.preview,
+      workers,
+      notes: [
+        `Positions up to ${money(workerPatch.maxPositionNotional!)} (${input.positionPct}% of ${money(input.equity)}), up to ${accountPatch.maxConcurrentPositions} at once.`,
+        `A stop-out may cost up to ${money(workerPatch.riskPerTrade!)} per trade. Costs (spread, slippage) grow with size too.`,
+        `The account stops taking new entries for the day at −${money(accountPatch.maxDailyLoss!)}; each worker stands down alone at −${money(workerPatch.dailyLossLimit!)}.`,
+        'Bigger positions swing the account further in BOTH directions. A quick momentum rule has no proven edge: expect big losing days as well as winning ones.',
+        'The limits are fixed dollar amounts from today’s account size; they do not follow the account up or down. Paper only.',
+      ],
+    };
+    return { preview, accountNext: account.next, workerPatch, shareWorkers };
+  };
+
+  fastify.post('/api/risk/preset/preview', async (req) => {
+    requireAuth(req);
+    requireConfigured();
+    return buildPreset(parse(RiskPresetBody, req.body)).preview;
+  });
+
+  fastify.post('/api/risk/preset', async (req) => {
+    const s = requireAuth(req);
+    requireConfigured();
+    const body = parse(RiskPresetBody, req.body);
+    const { preview, accountNext, workerPatch, shareWorkers } = buildPreset(body);
+    if (!body.confirmed) throw new HttpError(428, 'CONFIRMATION_REQUIRED', 'the aggressive preset increases the maximum potential loss and requires confirmation');
+    const c = ctx();
+    const before = c.riskSettings.get();
+    await c.riskSettings.apply(accountNext, actorOf(s));
+    void app.audit.record({ action: 'RISK_LIMITS_CHANGED', actor: actorOf(s), env: c.env, details: { preset: 'aggressive', equity: preview.equity, before, after: accountNext, changes: preview.account.changes } });
+    for (const w of shareWorkers) await c.workers.updateConfig(w.id, { limits: workerPatch }, actorOf(s));
+    c.timeline.add({
+      kind: 'control',
+      severity: 'warn',
+      title: 'Aggressive preset applied',
+      detail: `positions up to ${preview.positionPct}% of $${Math.round(preview.equity).toLocaleString('en-US')}, daily-loss stop ${preview.dailyLossPct}% · ${shareWorkers.length} workers`,
+    });
+    app.bus.emit('SYSTEM_UPDATED', {});
+    return { limits: c.riskSettings.get(), workers: shareWorkers.length };
   });
 
   // ── Manual trading (same RiskEngine — spec §55) ─────────────────────────

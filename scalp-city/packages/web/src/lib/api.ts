@@ -7,6 +7,8 @@ import type {
   ReadinessView,
   RiskLimits,
   RiskLimitsChangePreview,
+  RiskPresetPreview,
+  RiskPresetRequest,
   Snapshot,
   SystemView,
   Timeframe,
@@ -105,6 +107,9 @@ export const Api = {
   riskLimits: () => call<{ limits: RiskLimits }>('GET', '/api/risk/limits'),
   previewRiskLimits: (limits: Partial<RiskLimits>) => call<RiskLimitsChangePreview>('POST', '/api/risk/limits/preview', { limits }),
   updateRiskLimits: (limits: Partial<RiskLimits>, confirmed?: boolean, password?: string) => call<{ limits: RiskLimits }>('PUT', '/api/risk/limits', { limits, confirmed, password }),
+
+  previewRiskPreset: (req: Omit<RiskPresetRequest, 'confirmed'>) => call<RiskPresetPreview>('POST', '/api/risk/preset/preview', req),
+  applyRiskPreset: (req: Omit<RiskPresetRequest, 'confirmed'>) => call<{ limits: RiskLimits; workers: number }>('POST', '/api/risk/preset', { ...req, confirmed: true }),
 
   previewOrder: (req: ManualOrderRequest) => call<OrderPreview>('POST', '/api/orders/preview', req),
   submitOrder: (previewToken: string) => call<OrderView>('POST', '/api/orders', { previewToken, confirmed: true }),

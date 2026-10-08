@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
-import type { RiskLimits, RiskLimitsChangePreview } from '@scalp-city/shared';
+import type { RiskLimits, RiskLimitsChangePreview, RiskPresetPreview } from '@scalp-city/shared';
 import { Api, ApiError } from '../../lib/api';
 import { age, dateTimeET, displayCurrency, humanize, money, qtyStr } from '../../lib/format';
+import { ACCOUNT_LIMIT_LABELS, WORKER_LIMIT_LABELS, describeLimit } from '../../lib/presets';
 import { useStore } from '../../store/store';
 import { Btn, Check, cx, ErrorText, Field, inputCls, Money, Row } from '../ui';
 
@@ -54,6 +55,148 @@ const CFD_LIMIT_FIELDS: LimitField[] = [
   { key: 'maxPriceDeviationPct', label: 'Max price deviation', unit: '%' },
   { key: 'noEntriesBeforeCloseMinutes', label: 'No entries before session end', unit: 'min' },
 ];
+
+/**
+ * The Aggressive preset: sizes the share scalpers from the account (positions as a share of equity, a daily-loss stop
+ * as a share of equity) instead of the small dollar limits they ship with. Paper only; previewed, then confirmed.
+ */
+function AggressivePreset({ live }: { live: boolean }) {
+  const [open, setOpen] = useState(false);
+  const [positionPct, setPositionPct] = useState('30');
+  const [dailyLossPct, setDailyLossPct] = useState('5');
+  const [preview, setPreview] = useState<RiskPresetPreview | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [done, setDone] = useState<string | null>(null);
+
+  if (live) {
+    return <div className="label mt-3 !text-[9.5px]">Aggressive preset: PAPER account only. On a live account, set the limits by hand, small.</div>;
+  }
+  const req = () => ({ preset: 'aggressive' as const, positionPct: Number(positionPct), dailyLossPct: Number(dailyLossPct) });
+  const valid = Number(positionPct) >= 1 && Number(positionPct) <= 100 && Number(dailyLossPct) >= 0.5 && Number(dailyLossPct) <= 25;
+
+  const review = async () => {
+    setBusy(true);
+    setError(null);
+    setDone(null);
+    try {
+      setPreview(await Api.previewRiskPreset(req()));
+    } catch (e) {
+      setPreview(null);
+      setError(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const apply = async () => {
+    setBusy(true);
+    setError(null);
+    try {
+      const r = await Api.applyRiskPreset(req());
+      setDone(`Applied to the account and ${r.workers} worker${r.workers === 1 ? '' : 's'} · audit-logged`);
+      setPreview(null);
+      setOpen(false);
+    } catch (e) {
+      setError(e instanceof ApiError ? e.message : String(e));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const first = preview?.workers[0];
+
+  return (
+    <div className="mt-4 border-t border-line pt-3">
+      <div className="flex flex-wrap items-center gap-2">
+        <Btn variant="warn" onClick={() => setOpen(!open)} title="Sizes the share scalpers from the account instead of their small dollar limits (paper only).">
+          Aggressive preset (paper)
+        </Btn>
+        {done && <span className="label !text-call">{done}</span>}
+      </div>
+      {open && (
+        <div className="mt-3 border border-line-2 p-3">
+          <div className="text-[12px] text-fg-2">
+            The scalpers risk $5 a trade and hold about $5,000 at most, which is why a $100,000 account barely moves. This sizes them from the account instead.
+          </div>
+          <div className="mt-3 grid grid-cols-2 gap-x-4">
+            <Field label="Biggest position (% of account)">
+              <input
+                className={inputCls}
+                inputMode="decimal"
+                value={positionPct}
+                onChange={(e) => {
+                  setPreview(null);
+                  setPositionPct(e.target.value);
+                }}
+              />
+            </Field>
+            <Field label="Stop for the day at a loss of (% of account)">
+              <input
+                className={inputCls}
+                inputMode="decimal"
+                value={dailyLossPct}
+                onChange={(e) => {
+                  setPreview(null);
+                  setDailyLossPct(e.target.value);
+                }}
+              />
+            </Field>
+          </div>
+          <div className="mt-3 flex gap-2">
+            <Btn variant="outline" onClick={review} disabled={busy || !valid}>
+              Preview
+            </Btn>
+            <Btn variant="ghost" onClick={() => setOpen(false)}>
+              Close
+            </Btn>
+          </div>
+          {preview && (
+            <div className="mt-3 border border-pending/60 bg-pending/5 p-3">
+              <div className="display text-[13px] text-pending">THIS INCREASES RISK · account {money(preview.equity)}</div>
+              <ul className="mt-2 flex list-disc flex-col gap-1 pl-4 text-[12px] text-fg-2">
+                {preview.notes.map((n) => (
+                  <li key={n}>{n}</li>
+                ))}
+              </ul>
+              <div className="label mt-3">Account limits</div>
+              {preview.account.changes.map((c) => (
+                <div key={c.key} className="num mt-1 flex justify-between text-[12px]">
+                  <span className="text-fg-2">{ACCOUNT_LIMIT_LABELS[c.key] ?? c.key}</span>
+                  <span className={c.increasesRisk ? 'text-pending' : 'text-fg'}>
+                    {describeLimit(c.key, c.from)} → {describeLimit(c.key, c.to)}
+                  </span>
+                </div>
+              ))}
+              {first && (
+                <>
+                  <div className="label mt-3">
+                    Each of the {preview.workers.length} workers ({preview.workers.map((w) => w.name).join(', ')})
+                  </div>
+                  {first.changes.map((c) => (
+                    <div key={c.key} className="num mt-1 flex justify-between text-[12px]">
+                      <span className="text-fg-2">{WORKER_LIMIT_LABELS[c.key] ?? c.key}</span>
+                      <span className="text-pending">
+                        {describeLimit(c.key, c.from)} → {describeLimit(c.key, c.to)}
+                      </span>
+                    </div>
+                  ))}
+                </>
+              )}
+              <div className="mt-3 flex gap-2">
+                <Btn variant="ghost" onClick={() => setPreview(null)}>
+                  Cancel
+                </Btn>
+                <Btn variant="warn" onClick={apply} disabled={busy}>
+                  Confirm — go aggressive
+                </Btn>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+      <ErrorText>{error}</ErrorText>
+    </div>
+  );
+}
 
 function LimitsEditor() {
   const risk = useStore((s) => s.risk);
@@ -144,6 +287,7 @@ function LimitsEditor() {
           The preset is for PAPER: up to 300 trades a day, 5 positions at once, $5,000 per position. Lower these before real money. On a live margin account under $25,000 the day-trade rule still stops it after three round trips in five days.
         </div>
       )}
+      {venue !== 'oanda' && <AggressivePreset live={live} />}
       {preview && (
         <div className={cx('mt-3 border p-3', preview.increasesRisk ? 'border-pending/60 bg-pending/5' : 'border-line-2')}>
           <div className={cx('display text-[13px]', preview.increasesRisk ? 'text-pending' : 'text-fg')}>{preview.increasesRisk ? 'THIS INCREASES RISK' : 'Tightens or keeps risk'}</div>
