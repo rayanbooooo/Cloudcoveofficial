@@ -48,14 +48,15 @@ input group "=== Money management ==="
 input ENUM_LOT_MODE  InpLotMode         = LOT_RISK_PERCENT;
 input double         InpFixedLot        = 0.10;
 input double         InpRiskPercent     = 1.0;
-input double         InpMaxRiskOverrun  = 2.0;     // Skip trade if min lot risks more than this x intended risk
+input double         InpMaxRiskOverrun  = 0.0;     // Skip trade if min lot risks more than this x intended risk, 0 = off
 input int            InpMaxSpreadPoints = 0;       // Skip entry if spread above (points), 0 = off
 
 input group "=== Misc ==="
 input long           InpMagic           = 88002;
 input int            InpDeviationPoints = 30;      // Max slippage (points)
+input bool           InpDebug           = true;    // Log why days/setups are skipped
 
-CTrade   g_trade;
+CTrade  g_trade;
 datetime g_lastBar   = 0;
 long     g_nyDay     = -1;
 bool     g_rangeOK   = false;
@@ -77,6 +78,8 @@ int HM(const int hhmm) { return (hhmm / 100) * 60 + (hhmm % 100); }
 datetime ToNY(const datetime t) { return t - (datetime)(InpServerToNYHours * 3600); }
 long     NYDay(const datetime t) { return (long)(ToNY(t) / 86400); }
 int      NYMinute(const datetime t) { return (int)((ToNY(t) % 86400) / 60); }
+
+void Dbg(const string s) { if(InpDebug) Print("[DRIDR] ", TimeToString(TimeCurrent(), TIME_DATE | TIME_MINUTES), " ", s); }
 
 double RangeHeight() { return (InpRefLevel == REF_IDR) ? (g_idrH - g_idrL) : (g_drH - g_drL); }
 
@@ -150,9 +153,16 @@ bool BuildRange()
       cnt++;
      }
    int expected = (e - s) / 5;
-   if(cnt < (int)(expected * 0.8)) return false;   // missing data / holiday
+   if(cnt < (int)(expected * 0.8))                 // missing data / holiday / wrong time offset
+     {
+      Dbg("no valid window: found " + IntegerToString(cnt) + " M5 bars, need " + IntegerToString((int)(expected * 0.8)) +
+          " (check InpServerToNYHours and M5 history)");
+      return false;
+     }
 
    g_drH = hi;  g_drL = lo;  g_idrH = bhi;  g_idrL = blo;
+   Dbg("range built | IDR " + DoubleToString(g_idrL, _Digits) + "-" + DoubleToString(g_idrH, _Digits) +
+       " | DR " + DoubleToString(g_drL, _Digits) + "-" + DoubleToString(g_drH, _Digits));
    return true;
   }
 
@@ -171,8 +181,14 @@ double CalcLots(const ENUM_ORDER_TYPE type, const double entry, const double sl)
       double lossPerLot = MathAbs(profit);
       double riskMoney  = AccountInfoDouble(ACCOUNT_EQUITY) * InpRiskPercent / 100.0;
       lots = riskMoney / lossPerLot;
-      // minimum lot would risk far more than intended -> skip instead of overrisking
-      if(lots < minL && minL * lossPerLot > riskMoney * InpMaxRiskOverrun) return 0.0;
+      if(lots < minL)
+        {
+         double pct = minL * lossPerLot / AccountInfoDouble(ACCOUNT_EQUITY) * 100.0;
+         Dbg("min lot " + DoubleToString(minL, 2) + " risks " + DoubleToString(pct, 1) + "% of equity (wanted " +
+             DoubleToString(InpRiskPercent, 1) + "%)");
+         // minimum lot would risk far more than intended -> optionally skip instead of overrisking
+         if(InpMaxRiskOverrun > 0 && minL * lossPerLot > riskMoney * InpMaxRiskOverrun) return 0.0;
+        }
      }
    lots = MathFloor(lots / step) * step;
    lots = MathMax(minL, MathMin(maxL, lots));
@@ -193,13 +209,17 @@ void Enter(const int dir, const double slExtreme)
    double entry = (dir > 0) ? ask : bid;
    double sl    = (dir > 0) ? slExtreme - InpSLBufferPoints * point
                             : slExtreme + InpSLBufferPoints * point;
-   if((dir > 0 && sl >= entry) || (dir < 0 && sl <= entry)) { g_armed = 0; return; }
+   if((dir > 0 && sl >= entry) || (dir < 0 && sl <= entry))
+     { Dbg("skip: stop on wrong side of entry"); g_armed = 0; return; }
 
    double risk = MathAbs(entry - sl);
-   if(InpMaxRiskPoints > 0 && risk / point > InpMaxRiskPoints) { g_armed = 0; return; }
+   if(InpMaxRiskPoints > 0 && risk / point > InpMaxRiskPoints)
+     { Dbg("skip: stop " + DoubleToString(risk / point, 0) + " points > InpMaxRiskPoints"); g_armed = 0; return; }
 
    double minDist = SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL) * point;
-   if(risk < minDist) { g_armed = 0; return; }
+   if(risk < minDist) { Dbg("skip: stop inside broker stop level"); g_armed = 0; return; }
+   Dbg("entry trigger | stop distance " + DoubleToString(risk / point, 0) + " points, day extreme " +
+       DoubleToString(slExtreme, digits));
 
    double tp = (dir > 0) ? entry + InpRR * risk : entry - InpRR * risk;
 
@@ -208,7 +228,7 @@ void Enter(const int dir, const double slExtreme)
 
    ENUM_ORDER_TYPE type = (dir > 0) ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
    double lots = CalcLots(type, entry, sl);
-   if(lots <= 0) { g_armed = 0; return; }
+   if(lots <= 0) { Dbg("skip: lot size zero (risk guard or OrderCalcProfit failed)"); g_armed = 0; return; }
 
    bool ok = (dir > 0) ? g_trade.Buy (lots, _Symbol, 0.0, sl, tp, "DR/IDR fib")
                        : g_trade.Sell(lots, _Symbol, 0.0, sl, tp, "DR/IDR fib");
@@ -232,7 +252,13 @@ void Enter(const int dir, const double slExtreme)
 void CheckFibEntry(const int nyMin)
   {
    if(nyMin >= HM(InpTradeEnd) || g_tradesToday >= InpMaxTradesPerDay || HasPosition())
-     { g_armed = 0; return; }
+     {
+      if(nyMin >= HM(InpTradeEnd))
+         Dbg("setup expired unfilled | leg " + DoubleToString(MathAbs(g_legEnd - g_legStart) / _Point, 0) +
+             " points, needed " + DoubleToString(InpMinLegFrac * RangeHeight() / _Point, 0));
+      g_armed = 0;
+      return;
+     }
 
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
@@ -308,14 +334,24 @@ void OnNewBar(const int nyMin)
    if(g_devDir == 1)                                       // was outside above -> short setup
      {
       g_devExtreme = MathMax(g_devExtreme, h1);
-      if(c1 <= hi) { g_armed = -1; g_legStart = g_devExtreme; g_legEnd = l1; g_devDir = 0; return; }
+      if(c1 <= hi)
+        {
+         g_armed = -1; g_legStart = g_devExtreme; g_legEnd = l1; g_devDir = 0;
+         Dbg("SHORT setup armed | deviation high " + DoubleToString(g_legStart, _Digits));
+         return;
+        }
       if(++g_devBars > InpMaxDevBars) g_devDir = 0;        // acceptance -> real breakout
       return;
      }
    if(g_devDir == -1)                                      // was outside below -> long setup
      {
       g_devExtreme = MathMin(g_devExtreme, l1);
-      if(c1 >= lo) { g_armed = 1; g_legStart = g_devExtreme; g_legEnd = h1; g_devDir = 0; return; }
+      if(c1 >= lo)
+        {
+         g_armed = 1; g_legStart = g_devExtreme; g_legEnd = h1; g_devDir = 0;
+         Dbg("LONG setup armed | deviation low " + DoubleToString(g_legStart, _Digits));
+         return;
+        }
       if(++g_devBars > InpMaxDevBars) g_devDir = 0;
       return;
      }
@@ -324,8 +360,8 @@ void OnNewBar(const int nyMin)
    else if(c1 < lo)  { g_devDir = -1; g_devExtreme = l1; g_devBars = 1; }
    else if(InpAllowWickDev)
      {
-      if(h1 > hi)      { g_armed = -1; g_legStart = h1; g_legEnd = l1; }
-      else if(l1 < lo) { g_armed = 1;  g_legStart = l1; g_legEnd = h1; }
+      if(h1 > hi)      { g_armed = -1; g_legStart = h1; g_legEnd = l1; Dbg("SHORT setup armed (wick)"); }
+      else if(l1 < lo) { g_armed = 1;  g_legStart = l1; g_legEnd = h1; Dbg("LONG setup armed (wick)"); }
      }
   }
 
