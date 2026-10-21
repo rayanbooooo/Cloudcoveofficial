@@ -1,1 +1,265 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Meridian Trading Lab</title>
+<meta name="description" content="Learn a rules-based trading process, live sessions, and a community that holds you accountable.">
+<style>
+  /* Rebrand here: change these tokens and the whole page follows. */
+  :root {
+    --bg: #0b0e14;
+    --surface: #131823;
+    --surface-2: #1a2130;
+    --border: #252d3f;
+    --text: #e8ecf4;
+    --muted: #9aa5ba;
+    --accent: #3ddc97;
+    --accent-ink: #06130d;
+    --radius: 14px;
+    --max: 1080px;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--bg); color: var(--text);
+    font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: inherit; }
+  .wrap { max-width: var(--max); margin: 0 auto; padding: 0 20px; }
+  section { padding: 72px 0; }
+  h1, h2, h3 { line-height: 1.15; letter-spacing: -0.02em; }
+  h1 { font-size: clamp(2.2rem, 6vw, 3.6rem); }
+  h2 { font-size: clamp(1.7rem, 4vw, 2.4rem); margin-bottom: 12px; }
+  h3 { font-size: 1.15rem; margin-bottom: 6px; }
+  .lead { color: var(--muted); font-size: 1.15rem; max-width: 640px; }
+  .eyebrow { color: var(--accent); font-weight: 600; font-size: .85rem; letter-spacing: .08em; text-transform: uppercase; margin-bottom: 14px; }
 
+  .banner { background: var(--surface-2); color: var(--muted); text-align: center; font-size: .8rem; padding: 8px 12px; border-bottom: 1px solid var(--border); }
+
+  nav { display: flex; justify-content: space-between; align-items: center; padding: 20px 0; }
+  .logo { font-weight: 700; letter-spacing: -.02em; font-size: 1.1rem; }
+  .logo span { color: var(--accent); }
+
+  .btn {
+    display: inline-block; background: var(--accent); color: var(--accent-ink);
+    font-weight: 700; padding: 14px 26px; border-radius: 999px; text-decoration: none;
+    transition: transform .15s, box-shadow .15s; border: 0; cursor: pointer; font-size: 1rem;
+  }
+  .btn:hover { transform: translateY(-2px); box-shadow: 0 8px 28px -8px var(--accent); }
+  .btn.ghost { background: transparent; color: var(--text); border: 1px solid var(--border); }
+  .btn.ghost:hover { box-shadow: none; border-color: var(--muted); }
+
+  .hero { padding: 56px 0 72px; }
+  .hero .cta-row { display: flex; gap: 14px; flex-wrap: wrap; margin: 30px 0 18px; }
+  .hero small { color: var(--muted); }
+  .hero h1 em { font-style: normal; color: var(--accent); }
+
+  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin-top: 48px; }
+  .stat { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; }
+  .stat b { display: block; font-size: 1.8rem; letter-spacing: -.02em; }
+  .stat span { color: var(--muted); font-size: .9rem; }
+
+  .video {
+    margin-top: 40px; aspect-ratio: 16/9; background: linear-gradient(135deg, var(--surface), var(--surface-2));
+    border: 1px solid var(--border); border-radius: var(--radius); display: grid; place-items: center; color: var(--muted);
+  }
+  .video .play { width: 72px; height: 72px; border-radius: 50%; background: var(--accent); display: grid; place-items: center; margin: 0 auto 10px; }
+  .video .play::after { content: ""; border-left: 20px solid var(--accent-ink); border-top: 12px solid transparent; border-bottom: 12px solid transparent; margin-left: 5px; }
+  .video p { text-align: center; font-size: .9rem; }
+
+  .grid { display: grid; gap: 18px; margin-top: 36px; }
+  .grid.three { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 26px; }
+  .card .num { color: var(--accent); font-weight: 700; margin-bottom: 10px; display: block; }
+  .card p { color: var(--muted); }
+
+  .quote p { color: var(--text); margin-bottom: 14px; }
+  .quote cite { color: var(--muted); font-style: normal; font-size: .9rem; }
+
+  .pricing { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 18px; margin-top: 36px; }
+  .plan { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 30px; display: flex; flex-direction: column; }
+  .plan.featured { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 20px 50px -30px var(--accent); }
+  .plan .tag { color: var(--accent); font-size: .8rem; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
+  .price { font-size: 2.6rem; font-weight: 700; letter-spacing: -.03em; margin: 10px 0 4px; }
+  .price small { font-size: 1rem; color: var(--muted); font-weight: 400; }
+  .plan ul { list-style: none; margin: 20px 0 28px; flex: 1; }
+  .plan li { padding: 8px 0 8px 28px; position: relative; color: var(--muted); border-bottom: 1px solid var(--border); }
+  .plan li:last-child { border-bottom: 0; }
+  .plan li::before { content: "✓"; position: absolute; left: 0; color: var(--accent); font-weight: 700; }
+
+  details { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px 22px; margin-top: 12px; }
+  summary { cursor: pointer; font-weight: 600; }
+  details p { color: var(--muted); margin-top: 10px; }
+
+  .final { text-align: center; background: linear-gradient(180deg, transparent, var(--surface)); border-top: 1px solid var(--border); }
+  .final .lead { margin: 0 auto 28px; }
+  form { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; max-width: 520px; margin: 0 auto; }
+  input[type=email] {
+    flex: 1 1 240px; background: var(--bg); border: 1px solid var(--border); color: var(--text);
+    padding: 14px 18px; border-radius: 999px; font-size: 1rem;
+  }
+  input[type=email]:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
+  #form-msg { margin-top: 14px; color: var(--accent); min-height: 1.4em; }
+
+  footer { padding: 36px 0 60px; color: var(--muted); font-size: .8rem; border-top: 1px solid var(--border); }
+  footer p + p { margin-top: 12px; }
+
+  @media (max-width: 600px) { section { padding: 52px 0; } .btn { width: 100%; text-align: center; } }
+</style>
+</head>
+<body>
+
+<div class="banner">Sample page built as a template. Replace brand, copy, numbers and testimonials with the client's real ones.</div>
+
+<div class="wrap">
+  <nav>
+    <div class="logo">Meridian<span>.</span>Lab</div>
+    <a class="btn ghost" href="#join">Join the waitlist</a>
+  </nav>
+</div>
+
+<header class="hero">
+  <div class="wrap">
+    <p class="eyebrow">Live trading education</p>
+    <h1>Stop guessing. Trade with a <em>process</em> you can repeat.</h1>
+    <p class="lead">A rules-based framework, live market sessions and a small community that keeps you accountable. Built for traders who are done with random signals.</p>
+    <div class="cta-row">
+      <a class="btn" href="#pricing">See membership options</a>
+      <a class="btn ghost" href="#how">How it works</a>
+    </div>
+    <small>Educational content only. Trading involves substantial risk of loss.</small>
+
+    <div class="video">
+      <div>
+        <div class="play"></div>
+        <p>Drop the 60-second promo video here</p>
+      </div>
+    </div>
+
+    <div class="stats">
+      <div class="stat"><b>2,400+</b><span>Community members</span></div>
+      <div class="stat"><b>5 days</b><span>Live sessions per week</span></div>
+      <div class="stat"><b>40+</b><span>Lessons in the playbook</span></div>
+      <div class="stat"><b>7 days</b><span>Refund window</span></div>
+    </div>
+  </div>
+</header>
+
+<section id="how">
+  <div class="wrap">
+    <p class="eyebrow">How it works</p>
+    <h2>A clear path from confused to consistent</h2>
+    <p class="lead">No hype, no secret indicator. A method, practice and feedback.</p>
+    <div class="grid three">
+      <div class="card"><span class="num">01</span><h3>Learn the framework</h3><p>Short lessons covering market structure, risk per trade, entries, exits and journaling.</p></div>
+      <div class="card"><span class="num">02</span><h3>Watch it applied live</h3><p>Join daily sessions where the process is walked through in real time, wins and losses included.</p></div>
+      <div class="card"><span class="num">03</span><h3>Get feedback</h3><p>Post your trades and journal. Get reviewed by mentors and peers so mistakes get fixed fast.</p></div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <p class="eyebrow">What members say</p>
+    <h2>Placeholder testimonials</h2>
+    <p class="lead">Swap in real member quotes and screenshots from the client. Never use invented ones on a live page.</p>
+    <div class="grid three">
+      <div class="card quote"><p>"Replace with a real quote about the process, the community or the live sessions."</p><cite>Member name, joined 2024</cite></div>
+      <div class="card quote"><p>"Replace with a real quote. Focus on what changed in their habits, not profit claims."</p><cite>Member name, joined 2025</cite></div>
+      <div class="card quote"><p>"Replace with a real quote. Specific and believable beats loud and exaggerated."</p><cite>Member name, joined 2025</cite></div>
+    </div>
+  </div>
+</section>
+
+<section id="pricing">
+  <div class="wrap">
+    <p class="eyebrow">Membership</p>
+    <h2>Pick how deep you want to go</h2>
+    <div class="pricing">
+      <div class="plan">
+        <span class="tag">Starter</span>
+        <div class="price">€39<small> / month</small></div>
+        <p style="color:var(--muted)">The playbook and the community.</p>
+        <ul>
+          <li>Full lesson library</li>
+          <li>Community chat access</li>
+          <li>Weekly recap video</li>
+        </ul>
+        <a class="btn ghost" href="#join">Choose Starter</a>
+      </div>
+      <div class="plan featured">
+        <span class="tag">Most popular</span>
+        <div class="price">€89<small> / month</small></div>
+        <p style="color:var(--muted)">Everything, plus the live room.</p>
+        <ul>
+          <li>Everything in Starter</li>
+          <li>Daily live sessions</li>
+          <li>Trade and journal reviews</li>
+          <li>Monthly Q&amp;A with the mentor</li>
+        </ul>
+        <a class="btn" href="#join">Choose Pro</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <p class="eyebrow">FAQ</p>
+    <h2>Questions people ask first</h2>
+    <details><summary>Do I need experience?</summary><p>No. The playbook starts from the basics. If you already trade, jump to the risk and journaling modules.</p></details>
+    <details><summary>Do you give signals or guarantee profits?</summary><p>No. This is education. Nobody can guarantee results in trading, and most people lose money. The goal is to help you build a disciplined process and manage risk.</p></details>
+    <details><summary>How much money do I need to start?</summary><p>You can learn and paper trade with no capital. Only ever trade with money you can afford to lose.</p></details>
+    <details><summary>Can I cancel?</summary><p>Yes, anytime, and you have a 7-day refund window on your first payment.</p></details>
+  </div>
+</section>
+
+<section class="final" id="join">
+  <div class="wrap">
+    <h2>Ready to trade with a plan?</h2>
+    <p class="lead">Join the waitlist and get the free "Risk Management Checklist" straight away.</p>
+    <form id="signup" novalidate>
+      <input type="email" id="email" placeholder="Your email" aria-label="Email address" required>
+      <button class="btn" type="submit">Get early access</button>
+    </form>
+    <p id="form-msg" role="status"></p>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <p>© <span id="year"></span> Meridian Trading Lab. All rights reserved.</p>
+    <p><strong>Risk disclosure:</strong> Trading financial instruments carries a high level of risk and may not be suitable for everyone. You could lose some or all of your capital. Past performance does not guarantee future results. Content on this site is for educational purposes only and is not financial advice.</p>
+  </div>
+</footer>
+
+<script>
+  document.getElementById('year').textContent = new Date().getFullYear();
+
+  // Wire this to the client's email provider (Mailchimp, ConvertKit, Beehiiv, ...).
+  // Until then the form only validates and shows a confirmation.
+  var SIGNUP_ENDPOINT = '';
+
+  document.getElementById('signup').addEventListener('submit', function (e) {
+    e.preventDefault();
+    var email = document.getElementById('email').value.trim();
+    var msg = document.getElementById('form-msg');
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+      msg.style.color = '#ff7a7a';
+      msg.textContent = 'Please enter a valid email address.';
+      return;
+    }
+    msg.style.color = '';
+    if (SIGNUP_ENDPOINT) {
+      fetch(SIGNUP_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: email }) })
+        .then(function () { msg.textContent = "You're in. Check your inbox."; })
+        .catch(function () { msg.style.color = '#ff7a7a'; msg.textContent = 'Something went wrong. Please try again.'; });
+    } else {
+      msg.textContent = "You're in. Check your inbox.";
+    }
+  });
+</script>
+</body>
+</html>
