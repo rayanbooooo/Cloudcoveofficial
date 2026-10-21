@@ -3,263 +3,402 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Meridian Trading Lab</title>
-<meta name="description" content="Learn a rules-based trading process, live sessions, and a community that holds you accountable.">
+<title>Meridian — A private trading education room</title>
+<meta name="description" content="A private education room for traders who care more about process than prediction.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Serif:ital@0;1&family=Inter:wght@300;400;500&display=swap" rel="stylesheet">
 <style>
   /* Rebrand here: change these tokens and the whole page follows. */
   :root {
-    --bg: #0b0e14;
-    --surface: #131823;
-    --surface-2: #1a2130;
-    --border: #252d3f;
-    --text: #e8ecf4;
-    --muted: #9aa5ba;
-    --accent: #3ddc97;
-    --accent-ink: #06130d;
-    --radius: 14px;
-    --max: 1080px;
+    --paper: #efeae1;
+    --ink: #0c0c0b;
+    --muted: rgba(12, 12, 11, .56);
+    --line: rgba(12, 12, 11, .14);
+    --accent: #2f4a3a;
+    --on-dark: #efeae1;
+    --on-dark-muted: rgba(239, 234, 225, .56);
+    --on-dark-line: rgba(239, 234, 225, .16);
+    --serif: "Instrument Serif", "Times New Roman", Georgia, serif;
+    --sans: "Inter", system-ui, -apple-system, "Segoe UI", sans-serif;
+    --pad: clamp(20px, 5vw, 64px);
+    --ease: cubic-bezier(.22, 1, .36, 1);
   }
   * { box-sizing: border-box; margin: 0; padding: 0; }
   html { scroll-behavior: smooth; }
   body {
-    background: var(--bg); color: var(--text);
-    font: 16px/1.6 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
-    -webkit-font-smoothing: antialiased;
+    background: var(--paper); color: var(--ink);
+    font: 300 16px/1.65 var(--sans);
+    -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+    overflow-x: hidden;
   }
-  a { color: inherit; }
-  .wrap { max-width: var(--max); margin: 0 auto; padding: 0 20px; }
-  section { padding: 72px 0; }
-  h1, h2, h3 { line-height: 1.15; letter-spacing: -0.02em; }
-  h1 { font-size: clamp(2.2rem, 6vw, 3.6rem); }
-  h2 { font-size: clamp(1.7rem, 4vw, 2.4rem); margin-bottom: 12px; }
-  h3 { font-size: 1.15rem; margin-bottom: 6px; }
-  .lead { color: var(--muted); font-size: 1.15rem; max-width: 640px; }
-  .eyebrow { color: var(--accent); font-weight: 600; font-size: .85rem; letter-spacing: .08em; text-transform: uppercase; margin-bottom: 14px; }
-
-  .banner { background: var(--surface-2); color: var(--muted); text-align: center; font-size: .8rem; padding: 8px 12px; border-bottom: 1px solid var(--border); }
-
-  nav { display: flex; justify-content: space-between; align-items: center; padding: 20px 0; }
-  .logo { font-weight: 700; letter-spacing: -.02em; font-size: 1.1rem; }
-  .logo span { color: var(--accent); }
-
-  .btn {
-    display: inline-block; background: var(--accent); color: var(--accent-ink);
-    font-weight: 700; padding: 14px 26px; border-radius: 999px; text-decoration: none;
-    transition: transform .15s, box-shadow .15s; border: 0; cursor: pointer; font-size: 1rem;
+  /* Paper grain */
+  body::before {
+    content: ""; position: fixed; inset: 0; z-index: 100; pointer-events: none; opacity: .07; mix-blend-mode: multiply;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='240' height='240'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='0 0 0 0 0  0 0 0 0 0  0 0 0 0 0  0 0 0 .9 0'/></filter><rect width='100%' height='100%' filter='url(%23n)'/></svg>");
   }
-  .btn:hover { transform: translateY(-2px); box-shadow: 0 8px 28px -8px var(--accent); }
-  .btn.ghost { background: transparent; color: var(--text); border: 1px solid var(--border); }
-  .btn.ghost:hover { box-shadow: none; border-color: var(--muted); }
+  a { color: inherit; text-decoration: none; }
+  ::selection { background: var(--ink); color: var(--paper); }
 
-  .hero { padding: 56px 0 72px; }
-  .hero .cta-row { display: flex; gap: 14px; flex-wrap: wrap; margin: 30px 0 18px; }
-  .hero small { color: var(--muted); }
-  .hero h1 em { font-style: normal; color: var(--accent); }
+  .progress { position: fixed; top: 0; left: 0; right: 0; height: 2px; background: var(--ink); transform-origin: 0 50%; transform: scaleX(0); z-index: 101; }
+  .sample { background: var(--ink); color: var(--on-dark-muted); text-align: center; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; padding: 8px var(--pad); }
 
-  .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin-top: 48px; }
-  .stat { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; }
-  .stat b { display: block; font-size: 1.8rem; letter-spacing: -.02em; }
-  .stat span { color: var(--muted); font-size: .9rem; }
+  .label { font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); font-weight: 400; }
+  .serif { font-family: var(--serif); font-weight: 400; letter-spacing: -.025em; }
+  .serif em { font-style: italic; }
 
-  .video {
-    margin-top: 40px; aspect-ratio: 16/9; background: linear-gradient(135deg, var(--surface), var(--surface-2));
-    border: 1px solid var(--border); border-radius: var(--radius); display: grid; place-items: center; color: var(--muted);
+  /* Nav */
+  nav { display: flex; justify-content: space-between; align-items: center; padding: 28px var(--pad); }
+  .wordmark { font-family: var(--serif); font-size: 26px; letter-spacing: -.02em; }
+  .nav-links { display: flex; gap: 32px; align-items: center; font-size: 13px; }
+  .nav-links a:not(.pill) { color: var(--muted); transition: color .3s; }
+  .nav-links a:not(.pill):hover { color: var(--ink); }
+  .pill { border: 1px solid var(--ink); border-radius: 999px; padding: 10px 20px; font-size: 13px; transition: background .3s, color .3s; }
+  .pill:hover { background: var(--ink); color: var(--paper); }
+  @media (max-width: 720px) { .nav-links a:not(.pill) { display: none; } }
+
+  /* Hero */
+  .hero { padding: clamp(48px, 9vw, 120px) var(--pad) 0; }
+  .hero h1 { font-size: clamp(3.2rem, 11vw, 10.5rem); line-height: .93; max-width: 14ch; }
+  .line { display: block; overflow: hidden; padding: 0 0 .12em; margin-bottom: -.12em; }
+  .line > span { display: block; }
+  .hero-foot { display: grid; grid-template-columns: 1.2fr 1fr; gap: 48px; margin-top: clamp(40px, 6vw, 80px); align-items: end; }
+  .hero-foot p { font-size: clamp(1.05rem, 1.6vw, 1.3rem); line-height: 1.5; max-width: 34ch; color: var(--muted); }
+  .hero-foot p b { color: var(--ink); font-weight: 400; }
+  .cta { display: inline-flex; align-items: center; gap: 14px; background: var(--ink); color: var(--paper); padding: 20px 34px; border-radius: 999px; font-size: 15px; font-weight: 400; justify-self: end; will-change: transform; }
+  .cta .arrow { display: inline-block; transition: transform .4s var(--ease); }
+  .cta:hover .arrow { transform: translateX(6px); }
+  @media (max-width: 800px) { .hero-foot { grid-template-columns: 1fr; } .cta { justify-self: start; } }
+
+  .meta { display: grid; grid-template-columns: repeat(3, 1fr); gap: 24px; border-top: 1px solid var(--line); margin-top: clamp(48px, 7vw, 96px); padding: 22px 0; }
+  .meta div span { display: block; margin-top: 4px; font-size: 14px; color: var(--ink); }
+  @media (max-width: 640px) { .meta { grid-template-columns: 1fr; gap: 16px; } }
+
+  /* Chart line */
+  .chart { padding: 0 var(--pad); margin-top: 8px; }
+  .chart svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .chart .area { fill: url(#fade); opacity: 0; }
+  .chart .stroke { fill: none; stroke: var(--ink); stroke-width: 2.5; stroke-linecap: round; stroke-linejoin: round; stroke-dasharray: 1; stroke-dashoffset: 1; }
+  .chart .grid line { stroke: var(--line); stroke-width: 1; }
+  .chart .dot { fill: var(--accent); }
+  .chart .ring { fill: none; stroke: var(--accent); stroke-width: 1.5; transform-box: fill-box; transform-origin: center; opacity: 0; }
+
+  /* Marquee */
+  .marquee { overflow: hidden; border-block: 1px solid var(--line); margin-top: clamp(56px, 8vw, 110px); padding: 26px 0; white-space: nowrap; }
+  .marquee-track { display: inline-flex; animation: slide 38s linear infinite; }
+  .marquee-track span { font-family: var(--serif); font-size: clamp(1.6rem, 3.4vw, 2.8rem); letter-spacing: -.02em; padding-right: 2.2rem; }
+  .marquee-track span i { font-size: .5em; color: var(--accent); margin-left: 2.2rem; vertical-align: .25em; font-style: normal; }
+  @keyframes slide { to { transform: translateX(-50%); } }
+
+  /* Method */
+  section.block { padding: clamp(80px, 12vw, 170px) var(--pad) 0; }
+  .block-head { display: grid; grid-template-columns: 1fr 2fr; gap: 48px; margin-bottom: clamp(40px, 6vw, 80px); }
+  .block-head h2 { font-size: clamp(2.4rem, 6vw, 5rem); line-height: 1; max-width: 16ch; }
+  @media (max-width: 800px) { .block-head { grid-template-columns: 1fr; gap: 20px; } }
+  .row { display: grid; grid-template-columns: 1fr 2fr; gap: 48px; padding: 36px 0 40px; position: relative; transition: padding .5s var(--ease); }
+  .row::before { content: ""; position: absolute; left: 0; right: 0; top: 0; height: 1px; background: var(--ink); transform-origin: 0 50%; transform: scaleX(var(--w, 1)); opacity: .9; }
+  .row .num { font-family: var(--serif); font-size: clamp(3rem, 7vw, 6rem); line-height: .9; color: var(--accent); }
+  .row h3 { font-family: var(--serif); font-weight: 400; font-size: clamp(1.8rem, 3.4vw, 2.8rem); line-height: 1.05; letter-spacing: -.02em; margin-bottom: 14px; }
+  .row p { color: var(--muted); max-width: 52ch; font-size: 1.05rem; }
+  .row:hover { padding-left: 14px; }
+  @media (max-width: 800px) { .row { grid-template-columns: 1fr; gap: 14px; } }
+
+  /* Manifesto — words fill as you scroll */
+  .manifesto { padding: clamp(100px, 16vw, 220px) var(--pad) 0; }
+  .manifesto p { font-family: var(--serif); font-size: clamp(2rem, 5.2vw, 4.6rem); line-height: 1.08; letter-spacing: -.02em; max-width: 22ch; }
+  .manifesto p .w { display: inline-block; margin-right: .26em; }
+  .manifesto .who { margin-top: 36px; }
+
+  /* Numbers */
+  .numbers { display: grid; grid-template-columns: repeat(4, 1fr); gap: 24px; margin-top: clamp(80px, 12vw, 160px); padding: 0 var(--pad); }
+  .numbers div { border-top: 1px solid var(--ink); padding-top: 18px; }
+  .numbers b { display: block; font-family: var(--serif); font-weight: 400; font-size: clamp(2.8rem, 6.5vw, 5.6rem); line-height: 1; letter-spacing: -.03em; }
+  .numbers span { display: block; margin-top: 10px; font-size: 13px; color: var(--muted); }
+  @media (max-width: 800px) { .numbers { grid-template-columns: repeat(2, 1fr); gap: 40px 24px; } }
+
+  /* Access — dark */
+  .access { background: var(--ink); color: var(--on-dark); margin-top: clamp(100px, 14vw, 200px); padding: clamp(80px, 11vw, 150px) var(--pad); }
+  .access .label { color: var(--on-dark-muted); }
+  .access h2 { font-size: clamp(2.4rem, 6vw, 5rem); line-height: 1; max-width: 14ch; margin-bottom: clamp(40px, 6vw, 80px); }
+  .plan { display: grid; grid-template-columns: 1.1fr 1.6fr auto; gap: 32px; align-items: center; padding: 38px 0; border-top: 1px solid var(--on-dark-line); transition: background .4s; }
+  .plan:last-of-type { border-bottom: 1px solid var(--on-dark-line); }
+  .plan h3 { font-family: var(--serif); font-weight: 400; font-size: clamp(2rem, 4vw, 3.4rem); line-height: 1; letter-spacing: -.02em; }
+  .plan .tag { display: inline-block; margin-top: 10px; font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: #a9c7b4; }
+  .plan ul { list-style: none; color: var(--on-dark-muted); font-size: 15px; }
+  .plan li { padding: 3px 0; }
+  .plan li::before { content: "—"; margin-right: 12px; color: var(--on-dark); opacity: .5; }
+  .plan .price { text-align: right; }
+  .plan .price b { display: block; font-family: var(--serif); font-weight: 400; font-size: clamp(2.4rem, 4.5vw, 4rem); line-height: 1; letter-spacing: -.03em; }
+  .plan .price span { font-size: 13px; color: var(--on-dark-muted); }
+  .plan .pill { display: inline-block; margin-top: 16px; border-color: var(--on-dark); color: var(--on-dark); }
+  .plan .pill:hover { background: var(--on-dark); color: var(--ink); }
+  @media (max-width: 860px) { .plan { grid-template-columns: 1fr; gap: 18px; } .plan .price { text-align: left; } }
+
+  /* FAQ */
+  .faq { padding: clamp(80px, 12vw, 170px) var(--pad) 0; display: grid; grid-template-columns: 1fr 2fr; gap: 48px; }
+  .faq h2 { font-size: clamp(2.4rem, 5vw, 4rem); line-height: 1; }
+  details { border-top: 1px solid var(--ink); padding: 24px 0; }
+  details:last-child { border-bottom: 1px solid var(--ink); }
+  summary { list-style: none; cursor: pointer; display: flex; justify-content: space-between; gap: 24px; font-family: var(--serif); font-size: clamp(1.4rem, 2.4vw, 2rem); letter-spacing: -.01em; line-height: 1.15; }
+  summary::-webkit-details-marker { display: none; }
+  summary::after { content: "+"; font-family: var(--sans); font-weight: 300; font-size: 1.6rem; line-height: 1; transition: transform .4s var(--ease); }
+  details[open] summary::after { transform: rotate(45deg); }
+  details p { margin-top: 14px; color: var(--muted); max-width: 56ch; }
+  @media (max-width: 800px) { .faq { grid-template-columns: 1fr; gap: 28px; } }
+
+  /* Final */
+  .final { padding: clamp(100px, 14vw, 200px) var(--pad) 0; text-align: center; }
+  .final h2 { font-size: clamp(2.8rem, 8vw, 7rem); line-height: .98; max-width: 14ch; margin: 0 auto 28px; }
+  .final p.sub { color: var(--muted); max-width: 44ch; margin: 0 auto 36px; }
+  form { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; max-width: 560px; margin: 0 auto; }
+  input[type=email] { flex: 1 1 260px; background: transparent; border: 0; border-bottom: 1px solid var(--ink); color: var(--ink); padding: 16px 4px; font: 300 17px var(--sans); border-radius: 0; }
+  input[type=email]::placeholder { color: var(--muted); }
+  input[type=email]:focus { outline: 0; border-bottom-width: 2px; }
+  form button { background: var(--ink); color: var(--paper); border: 0; padding: 18px 30px; border-radius: 999px; font: 400 15px var(--sans); cursor: pointer; }
+  #form-msg { margin-top: 16px; min-height: 1.5em; font-size: 14px; color: var(--accent); }
+  #form-msg.err { color: #9b2c2c; }
+  .giant { font-family: var(--serif); font-size: clamp(5rem, 23vw, 22rem); line-height: .8; letter-spacing: -.05em; text-align: center; margin-top: clamp(60px, 9vw, 120px); overflow: hidden; padding-bottom: .06em; }
+  .giant span { display: block; }
+
+  footer { padding: 36px var(--pad) 56px; color: var(--muted); font-size: 12px; line-height: 1.7; border-top: 1px solid var(--line); }
+  footer p + p { margin-top: 10px; max-width: 90ch; }
+
+  /* Motion is progressive enhancement: content stays visible if the script fails. */
+  .motion .line > span { transform: translateY(112%); }
+  .motion [data-reveal] { opacity: 0; transform: translateY(28px); }
+  .motion .row { --w: 0; }
+  .motion .giant span { transform: translateY(105%); }
+  @media (prefers-reduced-motion: reduce) {
+    .marquee-track { animation: none; }
+    html { scroll-behavior: auto; }
   }
-  .video .play { width: 72px; height: 72px; border-radius: 50%; background: var(--accent); display: grid; place-items: center; margin: 0 auto 10px; }
-  .video .play::after { content: ""; border-left: 20px solid var(--accent-ink); border-top: 12px solid transparent; border-bottom: 12px solid transparent; margin-left: 5px; }
-  .video p { text-align: center; font-size: .9rem; }
-
-  .grid { display: grid; gap: 18px; margin-top: 36px; }
-  .grid.three { grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
-  .card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 26px; }
-  .card .num { color: var(--accent); font-weight: 700; margin-bottom: 10px; display: block; }
-  .card p { color: var(--muted); }
-
-  .quote p { color: var(--text); margin-bottom: 14px; }
-  .quote cite { color: var(--muted); font-style: normal; font-size: .9rem; }
-
-  .pricing { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 18px; margin-top: 36px; }
-  .plan { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 30px; display: flex; flex-direction: column; }
-  .plan.featured { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), 0 20px 50px -30px var(--accent); }
-  .plan .tag { color: var(--accent); font-size: .8rem; font-weight: 700; text-transform: uppercase; letter-spacing: .08em; }
-  .price { font-size: 2.6rem; font-weight: 700; letter-spacing: -.03em; margin: 10px 0 4px; }
-  .price small { font-size: 1rem; color: var(--muted); font-weight: 400; }
-  .plan ul { list-style: none; margin: 20px 0 28px; flex: 1; }
-  .plan li { padding: 8px 0 8px 28px; position: relative; color: var(--muted); border-bottom: 1px solid var(--border); }
-  .plan li:last-child { border-bottom: 0; }
-  .plan li::before { content: "✓"; position: absolute; left: 0; color: var(--accent); font-weight: 700; }
-
-  details { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px 22px; margin-top: 12px; }
-  summary { cursor: pointer; font-weight: 600; }
-  details p { color: var(--muted); margin-top: 10px; }
-
-  .final { text-align: center; background: linear-gradient(180deg, transparent, var(--surface)); border-top: 1px solid var(--border); }
-  .final .lead { margin: 0 auto 28px; }
-  form { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; max-width: 520px; margin: 0 auto; }
-  input[type=email] {
-    flex: 1 1 240px; background: var(--bg); border: 1px solid var(--border); color: var(--text);
-    padding: 14px 18px; border-radius: 999px; font-size: 1rem;
-  }
-  input[type=email]:focus { outline: 2px solid var(--accent); outline-offset: 2px; }
-  #form-msg { margin-top: 14px; color: var(--accent); min-height: 1.4em; }
-
-  footer { padding: 36px 0 60px; color: var(--muted); font-size: .8rem; border-top: 1px solid var(--border); }
-  footer p + p { margin-top: 12px; }
-
-  @media (max-width: 600px) { section { padding: 52px 0; } .btn { width: 100%; text-align: center; } }
 </style>
 </head>
 <body>
+<div class="progress" id="progress"></div>
+<div class="sample">Sample page — template for a trading educator. Replace all copy, numbers and proof with the client's real ones.</div>
 
-<div class="banner">Sample page built as a template. Replace brand, copy, numbers and testimonials with the client's real ones.</div>
+<nav>
+  <a class="wordmark" href="#top">Meridian</a>
+  <div class="nav-links">
+    <a href="#method">Method</a>
+    <a href="#access">Access</a>
+    <a href="#faq">FAQ</a>
+    <a class="pill" href="#join">Request access</a>
+  </div>
+</nav>
 
-<div class="wrap">
-  <nav>
-    <div class="logo">Meridian<span>.</span>Lab</div>
-    <a class="btn ghost" href="#join">Join the waitlist</a>
-  </nav>
-</div>
+<header class="hero" id="top">
+  <h1 class="serif" aria-label="Trading is a craft. Treat it like one.">
+    <span class="line" aria-hidden="true"><span>Trading is</span></span>
+    <span class="line" aria-hidden="true"><span>a craft. <em>Treat</em></span></span>
+    <span class="line" aria-hidden="true"><span><em>it like one.</em></span></span>
+  </h1>
 
-<header class="hero">
-  <div class="wrap">
-    <p class="eyebrow">Live trading education</p>
-    <h1>Stop guessing. Trade with a <em>process</em> you can repeat.</h1>
-    <p class="lead">A rules-based framework, live market sessions and a small community that keeps you accountable. Built for traders who are done with random signals.</p>
-    <div class="cta-row">
-      <a class="btn" href="#pricing">See membership options</a>
-      <a class="btn ghost" href="#how">How it works</a>
-    </div>
-    <small>Educational content only. Trading involves substantial risk of loss.</small>
+  <div class="hero-foot" data-reveal>
+    <p>A private education room for traders who care more about <b>process</b> than prediction. No signals. No noise.</p>
+    <a class="cta magnetic" href="#join">Request access <span class="arrow">→</span></a>
+  </div>
 
-    <div class="video">
-      <div>
-        <div class="play"></div>
-        <p>Drop the 60-second promo video here</p>
-      </div>
-    </div>
-
-    <div class="stats">
-      <div class="stat"><b>2,400+</b><span>Community members</span></div>
-      <div class="stat"><b>5 days</b><span>Live sessions per week</span></div>
-      <div class="stat"><b>40+</b><span>Lessons in the playbook</span></div>
-      <div class="stat"><b>7 days</b><span>Refund window</span></div>
-    </div>
+  <div class="meta" data-reveal>
+    <div><span class="label">Format</span><span>Live room + playbook</span></div>
+    <div><span class="label">Sessions</span><span>Mon – Fri, 14:30 CET</span></div>
+    <div><span class="label">Intake</span><span>Limited, reviewed monthly</span></div>
   </div>
 </header>
 
-<section id="how">
-  <div class="wrap">
-    <p class="eyebrow">How it works</p>
-    <h2>A clear path from confused to consistent</h2>
-    <p class="lead">No hype, no secret indicator. A method, practice and feedback.</p>
-    <div class="grid three">
-      <div class="card"><span class="num">01</span><h3>Learn the framework</h3><p>Short lessons covering market structure, risk per trade, entries, exits and journaling.</p></div>
-      <div class="card"><span class="num">02</span><h3>Watch it applied live</h3><p>Join daily sessions where the process is walked through in real time, wins and losses included.</p></div>
-      <div class="card"><span class="num">03</span><h3>Get feedback</h3><p>Post your trades and journal. Get reviewed by mentors and peers so mistakes get fixed fast.</p></div>
-    </div>
+<div class="chart" aria-hidden="true">
+  <svg viewBox="0 0 1200 300" preserveAspectRatio="xMidYMid meet">
+    <defs>
+      <linearGradient id="fade" x1="0" x2="0" y1="0" y2="1">
+        <stop offset="0" stop-color="#0c0c0b" stop-opacity=".12"/>
+        <stop offset="1" stop-color="#0c0c0b" stop-opacity="0"/>
+      </linearGradient>
+    </defs>
+    <g class="grid"><line x1="0" y1="75" x2="1200" y2="75"/><line x1="0" y1="150" x2="1200" y2="150"/><line x1="0" y1="225" x2="1200" y2="225"/></g>
+    <path class="area" d="M0,230 C60,225 90,180 140,190 S220,240 280,210 S360,120 420,140 S500,200 560,170 S650,90 720,110 S800,170 860,130 S960,40 1040,70 S1130,30 1200,20 L1200,300 L0,300 Z"/>
+    <path class="stroke" id="chart-path" pathLength="1" d="M0,230 C60,225 90,180 140,190 S220,240 280,210 S360,120 420,140 S500,200 560,170 S650,90 720,110 S800,170 860,130 S960,40 1040,70 S1130,30 1200,20"/>
+    <circle class="ring" id="ring" cx="1200" cy="20" r="14"/>
+    <circle class="dot" id="dot" cx="1200" cy="20" r="5" opacity="0"/>
+  </svg>
+</div>
+
+<div class="marquee" aria-hidden="true">
+  <div class="marquee-track">
+    <span>Risk first<i>◆</i></span><span>Process over prediction<i>◆</i></span><span>Journal everything<i>◆</i></span><span>Patience is a position<i>◆</i></span>
+    <span>Risk first<i>◆</i></span><span>Process over prediction<i>◆</i></span><span>Journal everything<i>◆</i></span><span>Patience is a position<i>◆</i></span>
+  </div>
+</div>
+
+<section class="block" id="method">
+  <div class="block-head" data-reveal>
+    <span class="label">The method</span>
+    <h2 class="serif">Three habits that separate <em>traders</em> from gamblers.</h2>
+  </div>
+  <div class="row"><div class="num" data-reveal>01</div><div data-reveal><h3>Structure</h3><p>Learn to read the market the same way every day. One framework, clear criteria, no improvising on a feeling.</p></div></div>
+  <div class="row"><div class="num" data-reveal>02</div><div data-reveal><h3>Risk</h3><p>Decide what you can lose before you enter. Position sizing and stop discipline come before any entry idea.</p></div></div>
+  <div class="row"><div class="num" data-reveal>03</div><div data-reveal><h3>Review</h3><p>Every trade goes in a journal and gets reviewed. Mistakes become rules, and rules become habits.</p></div></div>
+</section>
+
+<section class="manifesto">
+  <p id="manifesto">We don't sell certainty, because there isn't any. We teach a way of working that survives being wrong.</p>
+  <span class="label who" data-reveal>— The founding principle</span>
+</section>
+
+<div class="numbers">
+  <div data-reveal><b data-count="2400" data-suffix="+">0</b><span>Members in the community</span></div>
+  <div data-reveal><b data-count="5">0</b><span>Live sessions every week</span></div>
+  <div data-reveal><b data-count="40" data-suffix="+">0</b><span>Lessons in the playbook</span></div>
+  <div data-reveal><b data-count="7">0</b><span>Day refund window</span></div>
+</div>
+
+<section class="access" id="access">
+  <span class="label" data-reveal>Access</span>
+  <h2 class="serif" data-reveal style="margin-top:14px">Choose how <em>close</em> you want to work.</h2>
+
+  <div class="plan" data-reveal>
+    <div><h3>Library</h3></div>
+    <ul><li>Full playbook and lesson library</li><li>Community discussion</li><li>Weekly recap</li></ul>
+    <div class="price"><b>€39</b><span>per month</span><br><a class="pill" href="#join">Request access</a></div>
+  </div>
+  <div class="plan" data-reveal>
+    <div><h3>The Room</h3><span class="tag">Most chosen</span></div>
+    <ul><li>Everything in Library</li><li>Daily live sessions</li><li>Trade and journal reviews</li><li>Monthly Q&amp;A with the mentor</li></ul>
+    <div class="price"><b>€89</b><span>per month</span><br><a class="pill" href="#join">Request access</a></div>
   </div>
 </section>
 
-<section>
-  <div class="wrap">
-    <p class="eyebrow">What members say</p>
-    <h2>Placeholder testimonials</h2>
-    <p class="lead">Swap in real member quotes and screenshots from the client. Never use invented ones on a live page.</p>
-    <div class="grid three">
-      <div class="card quote"><p>"Replace with a real quote about the process, the community or the live sessions."</p><cite>Member name, joined 2024</cite></div>
-      <div class="card quote"><p>"Replace with a real quote. Focus on what changed in their habits, not profit claims."</p><cite>Member name, joined 2025</cite></div>
-      <div class="card quote"><p>"Replace with a real quote. Specific and believable beats loud and exaggerated."</p><cite>Member name, joined 2025</cite></div>
-    </div>
-  </div>
-</section>
-
-<section id="pricing">
-  <div class="wrap">
-    <p class="eyebrow">Membership</p>
-    <h2>Pick how deep you want to go</h2>
-    <div class="pricing">
-      <div class="plan">
-        <span class="tag">Starter</span>
-        <div class="price">€39<small> / month</small></div>
-        <p style="color:var(--muted)">The playbook and the community.</p>
-        <ul>
-          <li>Full lesson library</li>
-          <li>Community chat access</li>
-          <li>Weekly recap video</li>
-        </ul>
-        <a class="btn ghost" href="#join">Choose Starter</a>
-      </div>
-      <div class="plan featured">
-        <span class="tag">Most popular</span>
-        <div class="price">€89<small> / month</small></div>
-        <p style="color:var(--muted)">Everything, plus the live room.</p>
-        <ul>
-          <li>Everything in Starter</li>
-          <li>Daily live sessions</li>
-          <li>Trade and journal reviews</li>
-          <li>Monthly Q&amp;A with the mentor</li>
-        </ul>
-        <a class="btn" href="#join">Choose Pro</a>
-      </div>
-    </div>
-  </div>
-</section>
-
-<section>
-  <div class="wrap">
-    <p class="eyebrow">FAQ</p>
-    <h2>Questions people ask first</h2>
-    <details><summary>Do I need experience?</summary><p>No. The playbook starts from the basics. If you already trade, jump to the risk and journaling modules.</p></details>
-    <details><summary>Do you give signals or guarantee profits?</summary><p>No. This is education. Nobody can guarantee results in trading, and most people lose money. The goal is to help you build a disciplined process and manage risk.</p></details>
-    <details><summary>How much money do I need to start?</summary><p>You can learn and paper trade with no capital. Only ever trade with money you can afford to lose.</p></details>
-    <details><summary>Can I cancel?</summary><p>Yes, anytime, and you have a 7-day refund window on your first payment.</p></details>
+<section class="faq" id="faq">
+  <h2 class="serif" data-reveal>Questions, <em>answered.</em></h2>
+  <div data-reveal>
+    <details><summary>Do I need experience?</summary><p>No. The playbook starts from the basics. If you already trade, jump straight to the risk and review modules.</p></details>
+    <details><summary>Do you give signals or guarantee profits?</summary><p>No. This is education. Nobody can guarantee results in trading, and most people lose money. The goal is to build a disciplined process and manage risk.</p></details>
+    <details><summary>How much money do I need?</summary><p>You can learn and paper trade with no capital. Only ever trade with money you can afford to lose.</p></details>
+    <details><summary>Can I cancel?</summary><p>Yes, anytime, with a 7-day refund window on your first payment.</p></details>
   </div>
 </section>
 
 <section class="final" id="join">
-  <div class="wrap">
-    <h2>Ready to trade with a plan?</h2>
-    <p class="lead">Join the waitlist and get the free "Risk Management Checklist" straight away.</p>
-    <form id="signup" novalidate>
-      <input type="email" id="email" placeholder="Your email" aria-label="Email address" required>
-      <button class="btn" type="submit">Get early access</button>
-    </form>
-    <p id="form-msg" role="status"></p>
-  </div>
+  <h2 class="serif" data-reveal>Work with a <em>plan.</em></h2>
+  <p class="sub" data-reveal>Request access and receive the Risk Management Checklist straight away.</p>
+  <form id="signup" novalidate data-reveal>
+    <input type="email" id="email" placeholder="Your email address" aria-label="Email address" required>
+    <button type="submit" class="magnetic">Request access</button>
+  </form>
+  <p id="form-msg" role="status"></p>
+  <div class="giant" aria-hidden="true"><span>Meridian</span></div>
 </section>
 
 <footer>
-  <div class="wrap">
-    <p>© <span id="year"></span> Meridian Trading Lab. All rights reserved.</p>
-    <p><strong>Risk disclosure:</strong> Trading financial instruments carries a high level of risk and may not be suitable for everyone. You could lose some or all of your capital. Past performance does not guarantee future results. Content on this site is for educational purposes only and is not financial advice.</p>
-  </div>
+  <p>© <span id="year"></span> Meridian. All rights reserved.</p>
+  <p><strong>Risk disclosure:</strong> Trading financial instruments carries a high level of risk and may not be suitable for everyone. You could lose some or all of your capital. Past performance does not guarantee future results. Content on this site is for educational purposes only and is not financial advice.</p>
 </footer>
 
+<script src="assets/motion.js"></script>
 <script>
   document.getElementById('year').textContent = new Date().getFullYear();
 
   // Wire this to the client's email provider (Mailchimp, ConvertKit, Beehiiv, ...).
   // Until then the form only validates and shows a confirmation.
   var SIGNUP_ENDPOINT = '';
-
   document.getElementById('signup').addEventListener('submit', function (e) {
     e.preventDefault();
     var email = document.getElementById('email').value.trim();
     var msg = document.getElementById('form-msg');
+    msg.className = '';
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
-      msg.style.color = '#ff7a7a';
-      msg.textContent = 'Please enter a valid email address.';
-      return;
+      msg.className = 'err'; msg.textContent = 'Please enter a valid email address.'; return;
     }
-    msg.style.color = '';
     if (SIGNUP_ENDPOINT) {
       fetch(SIGNUP_ENDPOINT, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: email }) })
-        .then(function () { msg.textContent = "You're in. Check your inbox."; })
-        .catch(function () { msg.style.color = '#ff7a7a'; msg.textContent = 'Something went wrong. Please try again.'; });
+        .then(function () { msg.textContent = "You're on the list. Check your inbox."; })
+        .catch(function () { msg.className = 'err'; msg.textContent = 'Something went wrong. Please try again.'; });
     } else {
-      msg.textContent = "You're in. Check your inbox.";
+      msg.textContent = "You're on the list. Check your inbox.";
     }
   });
+
+  (function () {
+    if (!window.Motion || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    var animate = Motion.animate, scroll = Motion.scroll, inView = Motion.inView, stagger = Motion.stagger;
+    var ease = [0.22, 1, 0.36, 1];
+    var $ = function (s, r) { return Array.prototype.slice.call((r || document).querySelectorAll(s)); };
+
+    document.documentElement.classList.add('motion');
+
+    // Page-load: headline lines rise out of a mask.
+    animate('.hero h1 .line > span', { y: ['112%', '0%'] }, { duration: 1.2, delay: stagger(0.13, { startDelay: 0.15 }), ease: ease });
+
+    // Chart line draws itself, then the area fades in and the end point pulses.
+    var path = document.getElementById('chart-path');
+    var area = document.querySelector('.chart .area');
+    var dot = document.getElementById('dot');
+    var ring = document.getElementById('ring');
+    inView('.chart', function () {
+      animate(0, 1, { duration: 2.4, ease: [0.65, 0, 0.35, 1], onUpdate: function (v) { path.style.strokeDashoffset = 1 - v; } })
+        .then(function () {
+          animate(area, { opacity: 1 }, { duration: 1 });
+          animate(dot, { opacity: 1 }, { duration: 0.4 });
+          animate(ring, { opacity: [0.9, 0], scale: [0.6, 2.6] }, { duration: 1.8, repeat: Infinity, ease: 'easeOut' });
+        });
+    }, { amount: 0.4 });
+
+    // Generic fade-up reveals.
+    inView('[data-reveal]', function (el) {
+      animate(el, { opacity: 1, y: 0 }, { duration: 0.9, ease: ease, delay: parseFloat(el.dataset.delay || 0) });
+    }, { amount: 0.25, margin: '0px 0px -8% 0px' });
+
+    // Method rows: the top rule draws across.
+    $('.row').forEach(function (row) {
+      inView(row, function () {
+        animate(0, 1, { duration: 1.2, ease: ease, onUpdate: function (v) { row.style.setProperty('--w', v); } });
+      }, { amount: 0.3 });
+    });
+
+    // Manifesto: words fill in as you scroll.
+    var m = document.getElementById('manifesto');
+    var words = m.textContent.trim().split(/\s+/);
+    m.innerHTML = words.map(function (w) { return '<span class="w" style="opacity:.14">' + w + '</span>'; }).join(' ');
+    var spans = $('.w', m);
+    scroll(function (p) {
+      var n = spans.length;
+      spans.forEach(function (s, i) {
+        var t = Math.min(1, Math.max(0, (p * (n + 4) - i) / 4));
+        s.style.opacity = 0.14 + 0.86 * t;
+      });
+    }, { target: m, offset: ['start 0.85', 'end 0.55'] });
+
+    // Count-up numbers.
+    $('[data-count]').forEach(function (el) {
+      var end = parseFloat(el.dataset.count), suffix = el.dataset.suffix || '';
+      inView(el, function () {
+        animate(0, end, { duration: 2, ease: ease, onUpdate: function (v) { el.textContent = Math.round(v).toLocaleString('en') + suffix; } });
+      }, { amount: 0.6 });
+    });
+
+    // Giant wordmark rises in the footer.
+    inView('.giant', function () {
+      animate('.giant span', { y: ['105%', '0%'] }, { duration: 1.4, ease: ease });
+    }, { amount: 0.3 });
+
+    // Reading progress bar.
+    scroll(animate('#progress', { scaleX: [0, 1] }, { ease: 'linear' }));
+
+    // Magnetic buttons (fine pointers only).
+    if (matchMedia('(pointer: fine)').matches) {
+      $('.magnetic').forEach(function (el) {
+        el.addEventListener('pointermove', function (e) {
+          var r = el.getBoundingClientRect();
+          var x = (e.clientX - (r.left + r.width / 2)) * 0.25;
+          var y = (e.clientY - (r.top + r.height / 2)) * 0.35;
+          animate(el, { x: x, y: y }, { duration: 0.3, ease: 'easeOut' });
+        });
+        el.addEventListener('pointerleave', function () {
+          animate(el, { x: 0, y: 0 }, { type: 'spring', stiffness: 220, damping: 14 });
+        });
+      });
+    }
+  })();
 </script>
 </body>
 </html>
